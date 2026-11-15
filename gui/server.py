@@ -35,7 +35,7 @@ CLAUDE_LOCK = threading.Lock()
 # Tracked by process name, so it also sees apps started from start.sh or by hand.
 APPS = {
     "glasses": {"label": "Glasses view", "cmd": "./demo.sh", "match": "privacy_filter.live"},
-    "voice": {"label": "Voice commands", "cmd": ".venv/bin/python -m privacy_filter.voice --adb",
+    "voice": {"label": "Voice commands", "cmd": ".venv/bin/python -m privacy_filter.voice",
               "match": "privacy_filter.voice"},
 }
 
@@ -220,12 +220,17 @@ def ask_claude(text):
             f"The user said: \"{text}\"\n\n"
             f"Existing profiles: {', '.join(names) or 'none'}. Active: {PR.active_name()}.\n"
             f"LOCKED profiles (never save over these): {', '.join(sorted(set(locked + ['default'])))}.\n"
-            "Steps: call list_capabilities; then save_profile; then activate_profile on it. Do NOT run test_profile.\n"
+            "First decide: is this a QUESTION or a CHANGE?\n"
+            "- QUESTION (e.g. 'which profile am I on?', 'what can you do?', 'what's blurred right now?', "
+            "'what profiles are there?'): answer it warmly in 1-3 short sentences using list_capabilities / "
+            "get_profile. Change NOTHING (no save_profile, no activate_profile).\n"
+            "- CHANGE: call list_capabilities; then save_profile; then activate_profile on it. Do NOT run test_profile.\n"
             "Naming: if the request tweaks the active profile (e.g. 'make it stronger', 'actually use two hands') "
             "and the active profile is not locked, save over it with the SAME name and keep its other settings. "
             "Otherwise create a new profile with a short descriptive kebab-case name. Never save over a locked one.\n"
-            "Finish with one or two short plain sentences for a non-technical audience: what the glasses do now, "
-            "and anything you could not do because the engine doesn't support it. Don't mention tests, tools or files."
+            "For a change, finish with one or two short plain sentences for a non-technical audience: what the "
+            "glasses do now, and anything you could not do because the engine doesn't support it. "
+            "Don't mention tests, tools or files."
         )
         mcp = {"mcpServers": {"privacy-filter": {
             "command": sys.executable, "args": ["-m", "privacy_filter.mcp_server"],

@@ -344,7 +344,8 @@ def run_claude(text, active_prof, model="haiku", timeout=60):
     prompt = (f"Active profile now:\n{json.dumps(active_prof)}\n\n"
               + (f"Recent conversation:\n{convo}\n" if convo else "")
               + f"User said (speech-to-text, may contain recognition errors): \"{text}\"")
-    tools = ["mcp__privacy-filter__save_profile", "mcp__privacy-filter__undo_profile"]
+    tools = ["mcp__privacy-filter__save_profile", "mcp__privacy-filter__undo_profile",
+             "mcp__privacy-filter__list_capabilities", "mcp__privacy-filter__get_profile"]
     cmd = ["claude", "-p", prompt, "--mcp-config", mcp_config_path(), "--strict-mcp-config",
            "--tools", "", "--allowedTools", *tools, "--system-prompt", SYSTEM, "--model", model,
            "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
