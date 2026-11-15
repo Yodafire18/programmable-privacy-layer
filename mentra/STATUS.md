@@ -6,13 +6,13 @@ Plugged into the Mac by USB, Mentra Live shows up as a standard USB webcam, **"M
 SDK or RTMP needed.
 
 1. Plug the glasses into the Mac. Check: `ffmpeg -f avfoundation -list_devices true -i ""` lists `[0] Mentra Camera`.
-2. `./demo.sh webcam` (uses index 0 = the glasses; the FaceTime camera is index 1).
-3. Keep the cable taped or looped so it can't be yanked out.
+2. `./demo.sh usb`, or just `./demo.sh`, which picks the glasses automatically by name ("Mentra Camera").
+   It runs under `caffeinate -di`, so the display won't sleep.
+3. Keep the cable taped or looped so it can't be yanked out. If it is pulled, the app shows
+   "RECONNECTING TO MENTRA CAMERA…" (no leak) and recovers on replug; it never falls back to the FaceTime camera.
+4. Good light; consent within about 2 m with both hands; look at the camera after consenting.
 
-Caveats:
-- The app picks the camera by **index**. If the glasses are unplugged, index 0 becomes the FaceTime camera
-  (still filtered, but the wrong view). Main session is switching to selection by name.
-- Only one camera mode is offered: **1280×720 at 30 fps**.
+Note: only one camera mode is offered: **1280×720 at 30 fps** (about 24–30 fps delivered in practice).
 
 ## Measurements (USB)
 | what | result | how |
@@ -58,13 +58,17 @@ Only 2 of 894 frames had no face. Best case (same light, seconds apart). Suggest
 - `./demo.sh` runs under `caffeinate -di` (main session, 667f8bc). Grace stays 0.5 s, floor 0.2.
 
 ## Open issues
-- **Consent flicker:** a consented face re-blurs when the head tilts down or turns (per-frame match
-  similarity falls under `drop_thresh` 0.3). It errs on the side of privacy, but looks glitchy. Main session is adding a short grace period.
-- **Early exit:** `--seconds 300` stopped at about 150 s. Likely a single failed webcam read ends capture; only
-  network streams reconnect. Main session is fixing it; until then, just relaunch.
-- **Unplugging mid-demo:** not tested yet. The fix above should cover it.
-- **Thumbs-down revoke:** not tested on the glasses yet. Distance tests (1 / 2 / 3 m) still to do.
-- **Battery and heat over USB:** not measured yet. USB probably keeps the glasses charged.
+- **Consent at 3 m fails; revoke at 2 m is slow (about 8 s).** Accepted for now (consent within 2 m). Fallback: `perception.hand_max_w` (see Decisions).
+- **Looking down after consent blurs** (similarity 0.00–0.29, same range as a stranger). This is intended behaviour, fails closed.
+- **Camera delivers about 24–26 fps**, sometimes 29–30, and less in dim light. Hardware limit; no action.
+
+## Resolved (a4d7c93, verified on the glasses in the re-test above)
+- **Consent flicker:** brief head turns no longer re-blur a consented face (grace 0.5 s, floor 0.2).
+- **Early exit at about 150 s:** a single failed webcam read used to end capture. Cameras now reconnect like streams.
+- **Unplugging mid-demo:** recovers in about 3 s after replug, no face visible, never falls back to the FaceTime camera.
+- **Camera picked by index:** now picked by name ("Mentra Camera").
+- **Display sleep mid-demo:** `demo.sh` runs under `caffeinate -di` (667f8bc).
+- **Thumbs-down / distance tests:** done (see Re-test). **Heat:** cold after about 5 min; USB-powered.
 
 ## Wireless (stretch goal, not tried)
 From the docs (verified): Bluetooth SDK `startStream()` sends to an `rtmp://`, `rtmps://`, `srt://` or WHIP URL, with
