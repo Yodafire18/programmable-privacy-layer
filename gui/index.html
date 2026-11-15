@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Filter · Dashboard</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171b22; --panel2: #1e232c; --line: #2a303b;
+    --text: #e8ecf2; --muted: #9aa4b2; --accent: #6ea8fe; --good: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 18px; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; line-height: 1.4; }
+  h1 { font-size: 1.5rem; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 1.1rem; margin: 0 0 .8rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+           padding: .55rem 1rem; border-radius: 10px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #0b1020; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+           border-radius: 10px; padding: .5rem .7rem; }
+  textarea { width: 100%; resize: vertical; }
+  .muted { color: var(--muted); }
+  .small { font-size: .85rem; }
+
+  /* live strip */
+  .strip { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 1.2rem;
+           padding: .9rem 1.5rem; background: #0b0e13; border-bottom: 1px solid var(--line); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--good); box-shadow: 0 0 10px var(--good);
+         animation: pulse 2s infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .strip .live { font-size: 1.15rem; }
+  .strip .live b { color: var(--good); }
+  .strip .spacer { flex: 1; }
+  .flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { 0% { background: rgba(74,222,128,.35); } 100% { background: transparent; } }
+
+  main { display: grid; grid-template-columns: 360px 1fr; gap: 1.2rem; padding: 1.2rem 1.5rem 3rem; max-width: 1500px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem; }
+  .col { display: flex; flex-direction: column; gap: 1.2rem; min-width: 0; }
+
+  /* ask box */
+  .ask textarea { font-size: 1.15rem; min-height: 3.2rem; }
+  .ask .row { display: flex; gap: .8rem; align-items: center; margin-top: .7rem; flex-wrap: wrap; }
+  .examples button { font-size: .8rem; padding: .3rem .7rem; border-radius: 999px; color: var(--muted); }
+  .spinner { width: 20px; height: 20px; border: 3px solid var(--line); border-top-color: var(--accent);
+             border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .reply { margin-top: .9rem; padding: .9rem 1rem; background: var(--panel2); border-radius: 10px; border-left: 4px solid var(--accent); }
+  .reply.err { border-left-color: var(--bad); }
+  table.diff, table.clips { width: 100%; border-collapse: collapse; margin-top: .6rem; font-size: .9rem; }
+  table.diff td, table.diff th, table.clips td, table.clips th { padding: .35rem .5rem; border-bottom: 1px solid var(--line); text-align: left; }
+  .before { color: var(--bad); text-decoration: line-through; opacity: .8; }
+  .after { color: var(--good); font-weight: 600; }
+
+  /* profile cards */
+  .card { padding: .85rem 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--panel2);
+          cursor: pointer; margin-bottom: .7rem; transition: border-color .15s; }
+  .card:hover { border-color: var(--accent); }
+  .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .card.active { border-left: 6px solid var(--good); }
+  .card .title { display: flex; align-items: center; gap: .5rem; font-weight: 650; font-size: 1.05rem; }
+  .card .sum { color: var(--muted); font-size: .85rem; margin-top: .25rem; }
+  .badge { white-space: nowrap; font-size: .7rem; padding: .1rem .5rem; border-radius: 999px; font-weight: 700; letter-spacing: .03em; }
+  .badge.on { background: rgba(74,222,128,.15); color: var(--good); }
+  .badge.lock { background: rgba(251,191,36,.15); color: var(--warn); }
+  .badge.changed { background: rgba(110,168,254,.2); color: var(--accent); }
+
+  /* editor */
+  .editor-head { display: flex; align-items: center; gap: .8rem; margin-bottom: 1rem; }
+  .editor-head h1 { font-size: 1.6rem; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem 1.5rem; }
+  .field label.lbl { display: block; color: var(--muted); font-size: .85rem; margin-bottom: .35rem; }
+  .toggles { display: flex; gap: .6rem; flex-wrap: wrap; }
+  .toggle { padding: .55rem 1rem; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; user-select: none; }
+  .toggle.on { background: rgba(110,168,254,.18); border-color: var(--accent); color: var(--text); }
+  .toggle.fixed { cursor: default; }
+  .gesture-row { display: flex; gap: .6rem; align-items: center; }
+  .gesture-row select { flex: 1; font-size: 1.05rem; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: var(--bg); }
+  .seg button.on { background: var(--accent); color: #0b1020; font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .problems { margin-top: 1rem; padding: .8rem 1rem; border-radius: 10px; background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.4); color: var(--warn); }
+  .problems ul { margin: .3rem 0 0; padding-left: 1.2rem; }
+  .actions { display: flex; gap: .7rem; flex-wrap: wrap; margin-top: 1.2rem; }
+  .plain { margin-top: 1rem; font-size: 1.05rem; padding: .8rem 1rem; background: var(--bg); border-radius: 10px; }
+  .toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--line);
+           padding: .7rem 1.2rem; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: var(--bad); color: var(--bad); }
+
+  /* test */
+  .stats { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .stat { background: var(--panel2); border-radius: 12px; padding: .8rem 1.1rem; min-width: 150px; }
+  .stat .v { font-size: 2rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat .k { color: var(--muted); font-size: .8rem; }
+  .v.zero { color: var(--good); } .v.some { color: var(--warn); }
+  details summary { cursor: pointer; color: var(--muted); margin-top: .8rem; }
+  pre { white-space: pre-wrap; font-size: .75rem; color: var(--muted); }
+
+  .voice { border-color: rgba(167,139,250,.5); }
+  .voice .heard { font-size: 1.2rem; font-style: italic; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="strip" id="strip">
+  <div class="dot"></div>
+  <div class="live">Live on the glasses: <b id="liveName">…</b></div>
+  <div class="muted small" id="liveWhen"></div>
+  <div class="spacer"></div>
+  <h1>🕶️ Privacy Filter</h1>
+</div>
+
+<main>
+  <div class="col">
+    <section class="panel">
+      <h2>Profiles</h2>
+      <div id="cards"></div>
+    </section>
+    <section class="panel voice" id="voicePanel" hidden>
+      <h2>🎙️ Voice</h2>
+      <div id="voiceBody"></div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="panel ask">
+      <h2>Describe it in plain English</h2>
+      <textarea id="askText" rows="2" placeholder="e.g. Blur faces and screens strongly. A thumbs up lets someone be seen; an open palm hides them again."></textarea>
+      <div class="row">
+        <button class="primary" id="askBtn" onclick="ask()">✨ Make it so</button>
+        <span id="askStatus" class="muted"></span>
+        <span class="examples">
+          <button onclick="example(this)">Blur screens too, strong blur</button>
+          <button onclick="example(this)">One thumbs up to be seen</button>
+          <button onclick="example(this)">Also blur license plates</button>
+        </span>
+      </div>
+      <div id="askOut"></div>
+    </section>
+
+    <section class="panel" id="editor">
+      <div class="muted">Select a profile.</div>
+    </section>
+
+    <section class="panel" id="testPanel">
+      <h2>Test results</h2>
+      <div id="testBody" class="muted">Select a profile.</div>
+    </section>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const GESTURE = {
+  peace_sign: ["✌️", "Peace sign"], thumbs_up: ["👍", "Thumbs up"], thumbs_down: ["👎", "Thumbs down"],
+  open_palm: ["✋", "Open palm"], fist: ["✊", "Fist"], pointing_up: ["☝️", "Pointing up"], i_love_you: ["🤟", "I love you"],
+};
+const TARGET = { faces: ["🙂", "Faces"], screens: ["📱", "Screens"] };
+const NUM = ["zero", "one", "two"];
+let S = { profiles: [], selected: null, draft: null, fingerprint: null, changed: new Set(), opts: null, test: null };
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ago = t => { if (!t) return ""; const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 5) return "just now"; if (s < 60) return Math.round(s) + "s ago"; if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago"; return new Date(t * 1000).toLocaleString(); };
+const clock = t => t ? new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ error: "bad response" }));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg, err) { const t = $("toast"); t.textContent = msg; t.className = "toast show" + (err ? " err" : "");
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.className = "toast", 2600); }
+
+const SAY = { peace_sign: ["a peace sign", "two peace signs"], thumbs_up: ["a thumbs up", "two thumbs up"],
+  thumbs_down: ["a thumbs down", "two thumbs down"], open_palm: ["an open palm", "two open palms"], fist: ["a fist", "two fists"],
+  pointing_up: ["a finger pointing up", "two fingers pointing up"], i_love_you: ["an “I love you” sign", "two “I love you” signs"] };
+function gestureText(g, hands) {
+  const e = (GESTURE[g] || [""])[0];
+  return `${e} ${(SAY[g] || [g, "two " + g])[hands === 2 ? 1 : 0]}`;
+}
+function summary(p) {
+  if (!p.consent) return "";
+  const t = (p.blur_targets || []).map(x => (TARGET[x] || [, x])[1]).join(" + ");
+  return `${t} · ${p.blur_strength} blur · ${gestureText(p.consent.gesture, p.consent.hands)} to be seen · ${gestureText(p.revoke.gesture, p.revoke.hands)} to hide`;
+}
+
+/* ---------- loading ---------- */
+async function loadAll(keepDraft) {
+  const j = await api("/api/profiles");
+  S.profiles = j.profiles; S.opts = j.options; S.fingerprint = j.status.fingerprint;
+  renderStatus(j.status);
+  if (!S.selected || !S.profiles.find(p => p.name === S.selected)) S.selected = j.status.active || (S.profiles[0] || {}).name;
+  renderCards();
+  if (!keepDraft) await select(S.selected);
+}
+async function select(name) {
+  if (!name) return;
+  S.selected = name;
+  const j = await api("/api/profiles/" + encodeURIComponent(name));
+  S.draft = JSON.parse(JSON.stringify(j.profile)); S.saved = j.profile; S.test = j.test;
+  renderCards(); renderEditor(); renderTest();
+}
+
+/* ---------- status strip (polled) ---------- */
+let lastActive = null;
+function renderStatus(st) {
+  $("liveName").textContent = st.active || "none";
+  $("liveWhen").textContent = st.activated_at ? `switched ${ago(st.activated_at)} (${clock(st.activated_at)})` : "";
+  if (lastActive !== null && lastActive !== st.active) { const s = $("strip"); s.classList.remove("flash"); void s.offsetWidth; s.classList.add("flash"); }
+  lastActive = st.active;
+  const vp = $("voicePanel");
+  if (st.voice) { vp.hidden = false; renderVoice(st.voice); } else vp.hidden = true;
+}
+function renderVoice(v) {
+  const pick = (...ks) => { for (const k of ks) if (v[k] !== undefined && v[k] !== null && v[k] !== "") return v[k]; };
+  const listening = pick("listening", "is_listening", "active");
+  const heard = pick("heard", "last_heard", "heard_text", "text", "transcript");
+  let change = pick("last_change", "change", "last_action", "result");
+  if (change && typeof change === "object") change = change.summary || change.description || JSON.stringify(change);
+  const when = pick("updated_at", "time", "ts", "timestamp", "_mtime");
+  const whenS = typeof when === "number" ? ago(when > 1e12 ? when / 1000 : when) : (when || "");
+  $("voiceBody").innerHTML =
+    (listening !== undefined ? `<div class="small">${listening ? "🟢 Listening" : "⚪ Not listening"}</div>` : "") +
+    (heard ? `<div class="heard">“${esc(heard)}”</div>` : `<div class="muted">Nothing heard yet.</div>`) +
+    (change ? `<div class="small" style="margin-top:.4rem">→ ${esc(change)}</div>` : "") +
+    (v.error ? `<div class="small" style="color:var(--bad)">${esc(v.error)}</div>` : "") +
+    (whenS ? `<div class="muted small">${esc(whenS)}</div>` : "");
+}
+async function poll() {
+  try {
+    const st = await api("/api/status");
+    renderStatus(st);
+    if (st.fingerprint !== S.fingerprint) {           // something changed on disk (voice, Claude, another tab)
+      const before = S.fingerprint; S.fingerprint = st.fingerprint;
+      if (before !== null) { await loadAll(true); if (!isDirty()) await select(S.selected); }
+    }
+  } catch (e) { $("liveName").textContent = "server offline"; }
+}
+
+/* ---------- cards ---------- */
+function renderCards() {
+  $("cards").innerHTML = S.profiles.map(p => `
+    <div class="card ${p.active ? "active" : ""} ${p.name === S.selected ? "selected" : ""}" onclick="select('${esc(p.name)}')">
+      <div class="title">${esc(p.name)}
+        ${p.active ? '<span class="badge on">LIVE</span>' : ""}
+        ${p.locked ? '<span class="badge lock">🔒 LOCKED</span>' : ""}
+        ${S.changed.has(p.name) ? '<span class="badge changed">CHANGED</span>' : ""}
+      </div>
+      <div class="sum">${esc(summary(p))}</div>
+    </div>`).join("") || '<div class="muted">No profiles yet.</div>';
+}
+
+/* ---------- editor ---------- */
+function isDirty() { return S.draft && S.saved && JSON.stringify(strip(S.draft)) !== JSON.stringify(strip(S.saved)); }
+function strip(p) { return { d: p.description, t: p.blur_targets, c: p.consent, r: p.revoke, s: p.blur_strength }; }
+
+function gestureSelect(id, val) {
+  return `<select id="${id}" onchange="edit()">` + Object.keys(GESTURE).map(g =>
+    `<option value="${g}" ${g === val ? "selected" : ""}>${GESTURE[g][0]}  ${GESTURE[g][1]}</option>`).join("") + "</select>";
+}
+function seg(id, values, val, labels) {
+  return `<div class="seg" id="${id}">` + values.map((v, i) =>
+    `<button type="button" class="${String(v) === String(val) ? "on" : ""}" onclick="setSeg('${id}','${v}')">${labels ? labels[i] : v}</button>`).join("") + "</div>";
+}
+function renderEditor() {
+  const p = S.draft; if (!p) return;
+  const locked = p.locked;
+  const targets = Object.keys(S.opts ? S.opts.targets : TARGET);
+  $("editor").innerHTML = `
+    <div class="editor-head">
+      <h1>${esc(p.name)}</h1>
+      ${p.active ? '<span class="badge on">LIVE</span>' : ""}
+      ${locked ? '<span class="badge lock">🔒 LOCKED · read-only, use “Save as new”</span>' : ""}
+    </div>
+    <div class="grid2">
+      <div class="field" style="grid-column:1/-1">
+        <label class="lbl">What gets blurred</label>
+        <div class="toggles">${targets.map(t => `
+          <span class="toggle ${p.blur_targets.includes(t) ? "on" : ""} ${t === "faces" ? "fixed" : ""}"
+                onclick="toggleTarget('${t}')" title="${t === "faces" ? "Faces are always blurred" : ""}">
+            ${(TARGET[t] || ["•"])[0]} ${(TARGET[t] || [, t])[1]} ${t === "faces" ? "<span class='muted small'>(always)</span>" : ""}</span>`).join("")}
+        </div>
+      </div>
+      <div class="field">
+        <label class="lbl">To be seen (consent)</label>
+        <div class="gesture-row">${gestureSelect("cg", p.consent.gesture)} ${seg("ch", [1, 2], p.consent.hands, ["1 hand", "2 hands"])}</div>
+      </div>
+      <div class="field">
+        <label class="lbl">To hide again (revoke)</label>
+        <div class="gesture-row">${gestureSelect("rg", p.revoke.gesture)} ${seg("rh", [1, 2], p.revoke.hands, ["1 hand", "2 hands"])}</div>
+      </div>
+      <div class="field">
+        <label class="lbl">Hold the gesture for <b id="holdV">${p.consent.hold_s.toFixed(2)} s</b></label>
+        <input type="range" id="hold" min="0.25" max="3" step="0.25" value="${p.consent.hold_s}" oninput="edit()">
+      </div>
+      <div class="field">
+        <label class="lbl">Blur strength</label>
+        ${seg("st", ["light", "medium", "strong"], p.blur_strength, ["Light", "Medium", "Strong"])}
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <label class="lbl">Description</label>
+        <textarea id="desc" rows="2" oninput="edit(true)">${esc(p.description)}</textarea>
+      </div>
+    </div>
+    <div class="plain" id="plain">${esc(summary(p))}</div>
+    <div id="problems"></div>
+    <div class="actions">
+      <button class="primary" onclick="save()" ${locked ? "disabled title='Locked profile'" : ""} id="saveBtn">💾 Save</button>
+      <button onclick="saveNew()">➕ Save as new</button>
+      <button onclick="duplicate()">⧉ Duplicate</button>
+      <button onclick="activate()" ${p.active && !isDirty() ? "disabled" : ""}>🟢 Activate on glasses</button>
+      <button onclick="runTest()" id="testBtn">🧪 Run test</button>
+      <span class="muted small" id="dirty"></span>
+    </div>`;
+  if (locked) document.querySelectorAll("#editor select, #editor input, #editor textarea, #editor .seg button")
+    .forEach(el => el.disabled = true);
+  showProblems(p.problems || []); updateDirty();
+}
+function toggleTarget(t) {
+  if (S.draft.locked || t === "faces") return;
+  const ts = S.draft.blur_targets; S.draft.blur_targets = ts.includes(t) ? ts.filter(x => x !== t) : [...ts, t];
+  renderEditorKeepFocus();
+}
+function setSeg(id, v) {
+  if (S.draft.locked) return;
+  if (id === "ch") S.draft.consent.hands = +v; if (id === "rh") S.draft.revoke.hands = +v; if (id === "st") S.draft.blur_strength = v;
+  renderEditorKeepFocus();
+}
+function edit(textOnly) {
+  const p = S.draft;
+  p.description = $("desc").value;
+  if (!textOnly) {
+    p.consent.gesture = $("cg").value; p.revoke.gesture = $("rg").value;
+    p.consent.hold_s = parseFloat($("hold").value); $("holdV").textContent = p.consent.hold_s.toFixed(2) + " s";
+  }
+  $("plain").textContent = summary(p); updateDirty(); validateDraft();
+}
+function renderEditorKeepFocus() { renderEditor(); validateDraft(); }
+function updateDirty() { const d = $("dirty"); if (d) d.textContent = isDirty() ? "● unsaved changes" : ""; }
+let vTimer;
+function validateDraft() {
+  clearTimeout(vTimer);
+  vTimer = setTimeout(async () => { try { const j = await api("/api/validate", S.draft); showProblems(j.problems); } catch (e) {} }, 150);
+}
+function showProblems(list) {
+  $("problems").innerHTML = list && list.length ? `<div class="problems">⚠️ <b>Heads up — the engine can't do everything here:</b><ul>${list.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "";
+}
+
+async function save() {
+  try { const j = await api("/api/save", S.draft); toast("Saved " + j.profile.name + (S.draft.active ? " · live now" : ""));
+        await afterWrite(j.profile.name, j.problems); }
+  catch (e) { toast(e.message, true); }
+}
+async function saveNew(suggested) {
+  const name = prompt("Name for the new profile:", suggested || S.draft.name + "-copy");
+  if (!name) return;
+  try { const j = await api("/api/save_new", { ...S.draft, name }); toast("Created " + j.profile.name);
+        await afterWrite(j.profile.name, j.problems); }
+  catch (e) { toast(e.message, true); }
+}
+function duplicate() { saveNew(S.draft.name + "-copy"); }
+async function afterWrite(name, problems) {
+  S.changed.add(name); S.selected = name; await loadAll(); if (problems && problems.length) showProblems(problems);
+}
+async function activate() {
+  try {
+    if (isDirty() && !S.draft.locked) { await api("/api/save", S.draft); }
+    await api("/api/activate", { name: S.draft.name }); toast("🟢 " + S.draft.name + " is live on the glasses");
+    await loadAll();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- test ---------- */
+function renderTest(running) {
+  const t = S.test, b = $("testBody");
+  if (running) { b.innerHTML = `<span class="spinner"></span> Running <b>${esc(S.selected)}</b> on the test clips…`; return; }
+  if (!t || !t.exists) { b.innerHTML = `<span class="muted">No test run yet for <b>${esc(S.selected)}</b>. Press 🧪 Run test.</span>`; return; }
+  const tot = t.totals || {};
+  const stat = (v, k) => `<div class="stat"><div class="v ${v ? "some" : "zero"}">${v ?? "–"}</div><div class="k">${k}</div></div>`;
+  b.innerHTML = `
+    <div class="muted small" style="margin-bottom:.7rem">Last run ${ago(t.ran_at)} · ${new Date(t.ran_at * 1000).toLocaleString()}</div>
+    <div class="stats">
+      ${stat(tot.leak_frames, "frames where a face leaked")}
+      ${stat(tot.false_visible_frames, "unblurred without consent")}
+      <div class="stat"><div class="v">${(t.clips || []).length}</div><div class="k">test clips</div></div>
+    </div>
+    <table class="clips"><tr><th>Clip</th><th>Length</th><th>Frames</th><th>Leak frames</th><th>False visible</th></tr>
+      ${(t.clips || []).map(c => `<tr><td>${esc(c.clip.replace(/^synth_/, "").replace(/_/g, " "))}</td><td>${c.duration_s ?? ""} s</td>
+        <td>${c.frames ?? ""}</td><td>${c.leak_frames ?? ""}</td><td>${c.false_visible_frames ?? ""}</td></tr>`).join("")}
+    </table>
+    <details><summary>Full report</summary><pre>${esc(t.summary)}</pre></details>`;
+}
+async function runTest() {
+  const name = S.selected; renderTest(true); $("testBtn").disabled = true;
+  try { const j = await api("/api/test", { name }); if (S.selected === name) { S.test = j.results; renderTest(); }
+        toast(`Test finished in ${j.seconds}s`); }
+  catch (e) { toast(e.message, true); renderTest(); }
+  finally { const tb = $("testBtn"); if (tb) tb.disabled = false; }
+}
+
+/* ---------- plain English via Claude + MCP ---------- */
+function example(btn) { $("askText").value = btn.textContent; $("askText").focus(); }
+async function ask() {
+  const text = $("askText").value.trim(); if (!text) return;
+  const btn = $("askBtn"); btn.disabled = true;
+  const t0 = Date.now();
+  const tick = () => $("askStatus").innerHTML = `<span class="spinner"></span> Claude is setting it up… ${Math.round((Date.now() - t0) / 1000)}s`;
+  tick(); const h = setInterval(tick, 500);
+  $("askOut").innerHTML = "";
+  try {
+    const j = await api("/api/ask", { text });
+    $("askStatus").textContent = `Done in ${j.seconds}s`;
+    const d = j.diff || { changes: [] };
+    d.changes.forEach(c => S.changed.add(c.profile));
+    const fmt = v => v === null || v === undefined ? "—" : Array.isArray(v) ? v.join(", ") : String(v);
+    const rows = d.changes.flatMap(c => c.fields.map(f =>
+      `<tr><td>${esc(c.profile)}</td><td>${esc(f.field)}</td><td class="before">${esc(fmt(f.before))}</td><td class="after">${esc(fmt(f.after))}</td></tr>`));
+    const switched = d.active_before !== d.active_after
+      ? `<div style="margin-top:.6rem">🟢 Live profile: <span class="before">${esc(d.active_before)}</span> → <span class="after">${esc(d.active_after)}</span></div>` : "";
+    $("askOut").innerHTML = `
+      <div class="reply ${j.error ? "err" : ""}">${esc(j.error ? "⚠️ " + j.error : j.reply)}</div>
+      ${switched}
+      ${d.changes.length ? `<div style="margin-top:.6rem">${d.changes.map(c => `<b>${esc(c.profile)}</b> ${c.kind}${c.compared_with ? ` <span class="muted small">(compared with ${esc(c.compared_with)})</span>` : ""}`).join(" · ")}</div>
+        <table class="diff"><tr><th>Profile</th><th>Setting</th><th>Before</th><th>After</th></tr>${rows.join("")}</table>`
+        : `<div class="muted small" style="margin-top:.6rem">No profile files changed.</div>`}`;
+    S.selected = d.active_after || (d.changes[0] || {}).profile || S.selected;
+    await loadAll();
+  } catch (e) {
+    $("askStatus").textContent = ""; $("askOut").innerHTML = `<div class="reply err">⚠️ ${esc(e.message)}</div>`;
+  } finally { clearInterval(h); btn.disabled = false; }
+}
+$("askText").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask(); });
+
+loadAll().then(() => setInterval(poll, 1000));
+</script>
+</body>
+</html>
