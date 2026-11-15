@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+cache/
+runs/
+output/
+# synthetic clips are regenerated with: python -m eval synth
+corpus/**/raw.mp4
+# runtime state
+profiles/ACTIVE
+.DS_Store
+# auto-generated TLS material from mediamtx
+stream/auto.crt
+stream/auto.key

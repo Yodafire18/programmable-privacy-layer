@@ -1,0 +1,13 @@
+name: thumbs-up-consent
+description: Blur every face; a single thumbs up lets someone be seen; open palm to
+  go back.
+blur_targets:
+- faces
+consent:
+  gesture: thumbs_up
+  hands: 1
+  hold_s: 0.75
+revoke:
+  gesture: open_palm
+  hands: 1
+blur_strength: strong

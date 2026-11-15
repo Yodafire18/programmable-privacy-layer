@@ -1,0 +1,12 @@
+name: default
+description: Blur every face; two peace signs to be seen, two thumbs down to go back.
+blur_targets:
+- faces
+consent:
+  gesture: peace_sign
+  hands: 2
+  hold_s: 0.75
+revoke:
+  gesture: thumbs_down
+  hands: 2
+blur_strength: medium
