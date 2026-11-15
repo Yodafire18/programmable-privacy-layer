@@ -1,21 +1,24 @@
 """Voice overlay for the live app. The voice tool (privacy_filter.voice) writes profiles/VOICE_STATE.json;
 the live app polls it (like profiles/ACTIVE) and draws:
 
-  listening  red dot + "LISTENING..."                       while the mic records
-  thinking   "Heard: '...'" + "working..."                  speech understood, intent running
-  done       change card for CARD_S seconds: profile, heard, diff lines (+ added / - removed / ~ changed),
-             refusals in red
+  listening  pulsing red dot + "LISTENING"                  while the mic records
+  thinking   "You: '...'" caption + "THINKING" with animated dots
+  done       change card (only when something changed / was refused) + the assistant's spoken reply as a
+             caption ("You: ..." / "Glasses: ...") for CARD_S seconds
+  idle       nothing
 
 State file format: see voice_state.py.
 """
+import math
 import os
 import time
 
 import cv2
 
 from .voice_state import STATE, read_state
-CARD_S = 6.0
+CARD_S = 8.0
 STALE_S = {"listening": 12.0, "thinking": 40.0, "done": CARD_S, "error": 4.0}
+ACCENT = (255, 200, 120)        # BGR: soft blue for the assistant
 FONT = cv2.FONT_HERSHEY_DUPLEX
 COL = {"+": (90, 220, 90), "-": (90, 90, 255), "~": (60, 210, 255), "=": (230, 230, 230)}
 RED = (60, 60, 235)
@@ -68,14 +71,17 @@ class VoiceHUD:
         img = img.copy()
         ph = st.get("phase")
         if ph == "listening":
-            _pill(img, "LISTENING...", dot=True)
+            _pill(img, "LISTENING", dot=True)
         elif ph == "thinking":
-            _pill(img, (st.get("note") or "working").upper() + "...", dot=False)
+            dots = "." * (1 + int(time.time() * 3) % 3)
+            _pill(img, "THINKING" + dots.ljust(3), dot=False, spinner=True)
             _caption(img, st)
         elif ph == "error":
-            _pill(img, st.get("note") or "DIDN'T CATCH THAT", dot=False, col=(40, 40, 160))
+            _pill(img, st.get("note") or "TRY AGAIN", dot=False, col=(40, 40, 160))
         elif ph == "done":
-            _card(img, st)
+            if st.get("lines") or st.get("refusals") or "reply" not in st:
+                _card(img, st)
+            _caption(img, st, reply=True)
         return img
 
     def snap(self, img):
@@ -133,38 +139,56 @@ def _wrap(txt, s, maxw, th, max_lines=2):
     return [_fit(ln, s, maxw, th) for ln in lines]
 
 
-def _pill(img, txt, dot=True, col=(30, 30, 30)):
+def _pill(img, txt, dot=True, col=(30, 30, 30), spinner=False):
     s = _scale(img)
     fs, th = 1.3 * s, max(2, int(3 * s))
     (tw, tht), _ = cv2.getTextSize(txt, FONT, fs, th)
     pad = int(22 * s)
     r = int(14 * s)
-    w = tw + 2 * pad + (2 * r + pad // 2 if dot else 0)
+    w = tw + 2 * pad + (2 * r + pad // 2 if dot or spinner else 0)
     x0 = (img.shape[1] - w) // 2
     y0 = int(90 * s)
     _box(img, x0, y0, x0 + w, y0 + tht + 2 * pad, col=col, alpha=0.85)
     x = x0 + pad
-    if dot:
-        on = int(time.time() * 2.5) % 2 == 0          # blink
-        cv2.circle(img, (x + r, y0 + pad + tht // 2), r, (40, 40, 230) if on else (40, 40, 120), -1, cv2.LINE_AA)
+    c = (x + r, y0 + pad + tht // 2)
+    if dot:                                            # breathing dot with a soft expanding ring
+        ph = (time.time() * 1.6) % 1.0
+        k = 0.5 + 0.5 * math.sin(time.time() * 2 * math.pi * 1.2)
+        cv2.circle(img, c, int(r * (1.0 + 1.2 * ph)), (60, 60, int(255 * (1 - ph))), max(1, int(2 * s)), cv2.LINE_AA)
+        cv2.circle(img, c, int(r * (0.75 + 0.25 * k)), (40, 40, int(170 + 85 * k)), -1, cv2.LINE_AA)
+        x += 2 * r + pad // 2
+    elif spinner:                                      # rotating arc
+        a0 = int(time.time() * 360) % 360
+        cv2.ellipse(img, c, (r, r), a0, 0, 270, ACCENT, max(2, int(3 * s)), cv2.LINE_AA)
         x += 2 * r + pad // 2
     _text(img, txt, x, y0 + pad + tht, fs, th=th)
 
 
-def _caption(img, st):
+def _caption(img, st, reply=False):
+    """Bottom-centre subtitles: what you said, and (once done) what the glasses answered."""
     heard = st.get("heard") or ""
-    if not heard:
-        return
     s = _scale(img)
-    fs, th = 1.15 * s, max(2, int(2.5 * s))
+    fs, th = 1.1 * s, max(2, int(2.4 * s))
     W, H = img.shape[1], img.shape[0]
-    txt = _fit(f"Heard: \"{heard}\"", fs, W - int(120 * s), th)
-    (tw, tht), _ = cv2.getTextSize(txt, FONT, fs, th)
+    maxw = W - int(160 * s)
+    rows = []
+    if heard:
+        rows += [(ln, (255, 255, 200)) for ln in _wrap(f"You: \"{heard}\"", fs, maxw, th, 1)]
+    if reply and st.get("reply"):
+        rows += [(ln, ACCENT) for ln in _wrap(f"Glasses: {st['reply']}", fs, maxw, th, 3)]
+    if not rows:
+        return
+    lh = int(cv2.getTextSize("Ag", FONT, fs, th)[0][1] * 1.7)
+    tw = max(cv2.getTextSize(t, FONT, fs, th)[0][0] for t, _ in rows)
     pad = int(18 * s)
     x0 = (W - tw) // 2 - pad
-    y1 = H - int(130 * s)
-    _box(img, x0, y1 - tht - 2 * pad, x0 + tw + 2 * pad, y1, alpha=0.85)
-    _text(img, txt, x0 + pad, y1 - pad, fs, (255, 255, 200), th)
+    y1 = H - int(110 * s)
+    y0 = y1 - lh * len(rows) - 2 * pad + int(lh * 0.3)
+    _box(img, x0, y0, x0 + tw + 2 * pad, y1, alpha=0.85)
+    y = y0 + pad + int(lh * 0.7)
+    for t, col in rows:
+        _text(img, t, x0 + pad, y, fs, col, th)
+        y += lh
 
 
 def _card(img, st):
@@ -179,7 +203,7 @@ def _card(img, st):
     rows = []
     rows.append((f"{'TYPED' if st.get('source') == 'typed' else 'VOICE'}  >  profile: {st.get('profile', '?')}",
                  fh, (255, 255, 255)))
-    if st.get("heard"):
+    if st.get("heard") and not st.get("reply"):          # with a reply, the caption shows it
         rows.append((f"\"{st['heard']}\"", fb, (200, 200, 170)))
     for r in st.get("refusals") or []:
         rows.append((f"x  can't do: {r}", fs, RED))
