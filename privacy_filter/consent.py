@@ -8,6 +8,8 @@ complete a consent; `priority_tids` tells the embedder whose identity must be fr
 """
 import numpy as np
 
+from .tracker import iou
+
 CONSENT, REVOKE = "Victory", "Thumb_Down"
 
 
@@ -45,6 +47,8 @@ class ConsentEngine:
         self.hold = {}            # (track_id, kind) -> start time
         self.events = []          # (t, kind, track_id)
         self._next_key = 1
+        self.last_ok = {}         # tid -> t when a consented track last matched confidently
+        self.prev_box = {}        # tid -> box in the previous perceived frame
 
     @property
     def consent_g(self):
@@ -122,6 +126,18 @@ class ConsentEngine:
             if tid not in self.consented and sim_track >= cfg["match_thresh"] and tr.n >= 3:
                 self.consented.add(tid)        # remembered person re-appeared
             visible = tid in self.consented and sim_cur >= cfg["drop_thresh"]
+            if visible:
+                self.last_ok[tid] = t
+            elif tid in self.consented and tid in self.last_ok:
+                # grace: a head tilt/turn dips the match score; stay visible briefly, but ONLY while the track
+                # moves continuously (no box jump) and no other face overlaps it (no identity swap possible)
+                prev = self.prev_box.get(tid)
+                continuous = prev is not None and iou(prev, f["box"]) >= cfg.get("grace_iou", 0.5)
+                alone = all(iou(f["box"], g["box"]) <= 0.0 for g in faces if g is not f)
+                # and the face must still look like them: a different person / no fresh embedding scores ~0
+                similar = cur is not None and sim_cur >= cfg.get("grace_floor", 0.2)
+                visible = similar and continuous and alone and t - self.last_ok[tid] <= cfg.get("grace_s", 0.0)
+            self.prev_box[tid] = f["box"]
             states[tid] = {
                 "visible": visible,
                 "sim": sim_cur,
@@ -129,4 +145,7 @@ class ConsentEngine:
             }
         # forget consent flag for dead tracks (memory keeps the embedding)
         self.consented &= set(tracker.tracks)
+        for d in (self.last_ok, self.prev_box):
+            for k in [k for k in d if k not in tracker.tracks]:
+                del d[k]
         return states

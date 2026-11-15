@@ -146,3 +146,71 @@ def test_round_robin_during_pan():
     for f in range(3, 9 - 2):                          # after the first fill, every 3 frames cover all
         assert set(sum(w.embedded[f:f + 3], [])) == set(range(12))
     assert len(w.tr.tracks) == 12                      # identities kept through the pan
+
+
+# ---------- consent grace (head tilt/turn dips the match score) ----------
+
+def tilted(e, sim=0.25):
+    """An embedding with roughly `sim` cosine to e: what a head tilt does to the same person."""
+    o = ident()
+    o = o - (o @ e) * e
+    o /= np.linalg.norm(o)
+    v = sim * e + np.sqrt(1 - sim ** 2) * o
+    return v.astype(np.float16)
+
+
+def consented_world():
+    w = World()
+    me = ident()
+    w.ce.memory.append((1, me))
+    for _ in range(4):                                   # becomes visible as a remembered person
+        faces, tids, st = w.step([(box(200), me)])
+    assert st[tids[0]]["visible"]
+    return w, me
+
+
+def step_with(w, people_embs):
+    """people_embs: list of (box, emb_to_report) -> bypasses noisy() so we control similarity exactly."""
+    faces = [{"box": b, "score": 0.9, "emb": e} for b, e in people_embs]
+    tids = w.tr.update(faces)
+    st = w.ce.step(w.t, faces, tids, [], w.tr)
+    w.t += 0.1
+    return tids, st
+
+
+def test_grace_rides_out_short_dip():
+    w, me = consented_world()
+    for k in range(4):                                   # 0.4 s of low similarity, same place
+        tids, st = step_with(w, [(box(201 + k), tilted(me))])
+        assert st[tids[0]]["visible"], f"flickered at dip frame {k}"
+
+
+def test_grace_expires():
+    w, me = consented_world()
+    vis = []
+    for k in range(10):                                  # 1.0 s of low similarity
+        tids, st = step_with(w, [(box(201), tilted(me))])
+        vis.append(st[tids[0]]["visible"])
+    assert vis[0] and not vis[-1]
+
+
+def test_no_grace_when_another_face_overlaps():
+    w, me = consented_world()
+    stranger = ident()
+    tids, st = step_with(w, [(box(201), tilted(me)), (box(215), stranger.astype(np.float16))])
+    assert not any(s["visible"] for s in st.values())
+
+
+def test_no_grace_on_box_jump():
+    w, me = consented_world()
+    tids, st = step_with(w, [(box(201), me.astype(np.float16))])
+    assert st[tids[0]]["visible"]
+    tids2, st = step_with(w, [(box(240), tilted(me))])   # big jump + low sim: could be a different person
+    assert not st[tids2[0]]["visible"]
+
+
+def test_no_grace_for_a_different_person_in_the_same_spot():
+    w, me = consented_world()
+    stranger = ident()
+    tids, st = step_with(w, [(box(201), stranger.astype(np.float16))])   # continuous, alone, but sim ~0
+    assert not any(s["visible"] for s in st.values())

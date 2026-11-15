@@ -1,9 +1,10 @@
 #!/bin/zsh
 # One command for the demo. Never a blank screen: glasses stream -> webcam -> recorded clip.
 #
-#   ./demo.sh                 auto: glasses if streaming, else webcam
-#   ./demo.sh glasses         wait for the glasses stream (reconnects automatically if it drops)
-#   ./demo.sh webcam          Mac / iPhone (Continuity Camera) webcam
+#   ./demo.sh                 auto: Mentra over USB if plugged in, else glasses stream, else webcam
+#   ./demo.sh usb             Mentra glasses over USB, selected by name (waits/reconnects; never falls back)
+#   ./demo.sh glasses         wireless glasses stream via MediaMTX (reconnects automatically if it drops)
+#   ./demo.sh webcam          FaceTime camera, selected by name
 #   ./demo.sh clip [file]     recorded clip (backup)
 #   extra flags pass through, e.g.  ./demo.sh webcam --profile thumbs-up-consent --delay 1.5
 cd "$(dirname "$0")"
@@ -25,12 +26,15 @@ stream_up() { ffprobe -v quiet -rtsp_transport tcp -rw_timeout 3000000 -i "$URL_
 
 case $MODE in
   auto)
-    if stream_up; then echo "→ glasses stream found"; SRC=$URL_IN
-    else echo "→ no glasses stream, using webcam (run './demo.sh glasses' to wait for them)"; SRC=0; fi ;;
+    if ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | grep -q "Mentra Camera"; then
+      echo "→ Mentra glasses on USB"; SRC="cam:Mentra Camera"
+    elif stream_up; then echo "→ glasses stream found"; SRC=$URL_IN
+    else echo "→ no glasses found, using FaceTime camera (run './demo.sh usb' to wait for them)"; SRC="cam:FaceTime"; fi ;;
+  usb)     SRC="cam:Mentra Camera" ;;
   glasses) SRC=$URL_IN ;;
-  webcam)  SRC=${WEBCAM:-0} ;;
+  webcam)  SRC=${WEBCAM:-cam:FaceTime} ;;
   clip)    SRC=$CLIP ;;
-  *) echo "usage: ./demo.sh [auto|glasses|webcam|clip [file]] [flags]"; exit 1 ;;
+  *) echo "usage: ./demo.sh [auto|usb|glasses|webcam|clip [file]] [flags]"; exit 1 ;;
 esac
 
 echo "keys: q quit · f forget everyone · space photo · r record · d debug overlay"

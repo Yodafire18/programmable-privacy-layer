@@ -36,6 +36,22 @@ WIN = "privacy filter  (left: debug · right: output)"
 OUT = ROOT / "output"
 
 
+def find_camera(name):
+    """AVFoundation index of the first video device whose name contains `name` (case-insensitive), else None.
+    Re-run on every (re)connect: indices shift when devices are plugged/unplugged."""
+    import re
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                             capture_output=True, text=True, timeout=5).stderr
+    except Exception:
+        return None
+    video = out.split("video devices:")[-1].split("audio devices:")[0]
+    for m in re.finditer(r"\[(\d+)\] (.+)", video):
+        if name.lower() in m.group(2).lower():
+            return int(m.group(1))
+    return None
+
+
 def say(text):
     try:
         subprocess.Popen(["say", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -128,15 +144,31 @@ class Live:
 
     # ---------- threads ----------
     def _open(self):
-        src = self.source
-        cap = cv2.VideoCapture(int(src)) if str(src).isdigit() else cv2.VideoCapture(str(src), cv2.CAP_FFMPEG)
-        if str(src).isdigit():
+        src = str(self.source)
+        if src.startswith("cam:"):                 # camera by name, e.g. cam:Mentra Camera — never falls back
+            idx = find_camera(src[4:])
+            if idx is None:
+                return None
+            src = str(idx)
+        cap = cv2.VideoCapture(int(src)) if src.isdigit() else cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+        if src.isdigit():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         return cap
 
     def is_stream(self):
         return "://" in str(self.source)
+
+    def is_live(self):
+        """Sources that should reconnect forever instead of ending: network streams and cameras."""
+        s = str(self.source)
+        return self.is_stream() or s.isdigit() or s.startswith("cam:")
+
+    def _waiting_text(self, again):
+        if self.is_stream():
+            return "RECONNECTING TO GLASSES…" if again else "WAITING FOR GLASSES STREAM…"
+        name = str(self.source)[4:] if str(self.source).startswith("cam:") else "camera"
+        return f"RECONNECTING TO {name.upper()}…" if again else f"WAITING FOR {name.upper()}…"
 
     def capture(self):
         """Reads frames forever. Network streams (glasses) reconnect automatically when they drop."""
@@ -148,27 +180,29 @@ class Live:
         while not self.stop:
             if cap is None:
                 cap = self._open()
-                if not cap.isOpened():
-                    cap.release()
+                if cap is None or not cap.isOpened():
+                    if cap is not None:
+                        cap.release()
                     cap = None
-                    if self.is_stream():
-                        self.status = "WAITING FOR GLASSES STREAM…"
+                    if self.is_live():
+                        self.status = self._waiting_text(idx > 0)
                         time.sleep(1.0)
                         continue
                     print(f"!! could not open source {self.source}")
                     break
                 file_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-                if self.is_stream():
-                    print("stream connected" if idx == 0 else "stream reconnected")
+                if self.is_live():
+                    print("source connected" if idx == 0 else "source reconnected")
                 stamps.clear()                  # outage must not drag the fps estimate (and memory cap) down
                 self.status = None
             ok, img = cap.read()
             if not ok:
                 cap.release()
                 cap = None
-                if self.is_stream():
-                    print("stream dropped — reconnecting")
-                    self.status = "RECONNECTING TO GLASSES…"
+                if self.is_live():
+                    print("source dropped — reconnecting")
+                    self.status = self._waiting_text(True)
+                    time.sleep(0.3)
                     continue
                 break
             now = time.monotonic()

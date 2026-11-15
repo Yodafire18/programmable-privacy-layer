@@ -24,6 +24,9 @@ DEFAULTS = {
         "hold_s": 0.75,           # gesture must be held this long (video)
         "match_thresh": 0.5,      # memory match to become visible
         "drop_thresh": 0.3,       # per-frame sim below this -> blur instantly (identity switch guard)
+        "grace_s": 0.5,           # ...except a consented track may ride out a dip this long (head tilt/turn)
+        "grace_iou": 0.5,         #    if its box is continuous (IoU with previous frame) and no face overlaps it
+        "grace_floor": 0.2,       #    and its per-frame sim stays >= this (strangers / missing embeddings ~0)
         "win_x": 2.5,             # hand window: +-win_x face widths
         "win_up": 1.0,            # face heights above top
         "win_down": 3.0,          # face heights below bottom
