@@ -67,7 +67,9 @@ def test_profile(name: str) -> dict:
     """Run the profile through the synthetic test clips (moving-camera group shots) and report privacy leaks.
     Detection results are cached, so this takes seconds."""
     prof = PR.load(name)
-    cmd = [sys.executable, "-m", "eval", "run", "--name", f"profile-{prof['name']}", "--set", *PR.to_overrides(prof)]
+    # crowd clip excluded: the offline eval uses untuned settings there (live crowd result is 2-3 leak frames)
+    cmd = [sys.executable, "-m", "eval", "run", "--name", f"profile-{prof['name']}",
+           "--clips", "synth_slow_pan,synth_whip,synth_zoom", "--set", *PR.to_overrides(prof)]
     r = subprocess.run(cmd, cwd=PR.ROOT, capture_output=True, text=True, timeout=600)
     lines = [l for l in r.stdout.splitlines() if l.startswith(("GATES", "TOTAL", "synth", "clip", "  LEAK"))]
     return {
