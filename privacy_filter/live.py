@@ -60,6 +60,23 @@ def say(text):
         pass
 
 
+def drop_faces_on_hands(faces, hands, f):
+    """Low-confidence 'faces' sitting on a hand are hands (a fist/palm can fool SCRFD at the live 0.35 threshold).
+    Real faces score >= 0.5 (0 of 545 overlapped a hand in testing), so they are never dropped."""
+    if not f or not hands:
+        return faces
+    keep = []
+    for fc in faces:
+        x1, y1, x2, y2 = fc["box"]
+        area = max(1.0, (x2 - x1) * (y2 - y1))
+        covered = max((max(0.0, min(x2, h["box"][2]) - max(x1, h["box"][0])) *
+                       max(0.0, min(y2, h["box"][3]) - max(y1, h["box"][1])) for h in hands), default=0.0) / area
+        if fc["score"] < f["max_score"] and covered >= f["min_cover"]:
+            continue
+        keep.append(fc)
+    return keep
+
+
 def _perception_worker(cfg, req_ev, in_q, out_q, cmd_q):
     """Separate process: models + tracker + consent. Own GIL, so it can't stall capture/output."""
     import queue
@@ -95,6 +112,7 @@ def _perception_worker(cfg, req_ev, in_q, out_q, cmd_q):
         i, t, img = item
         screens.submit(img)               # runs alongside P() when objects.parallel
         fr = P(img, t)
+        fr["faces"] = drop_faces_on_hands(fr["faces"], fr["hands"], cfg["perception"].get("hand_face_filter"))
         objs = screens.result()
         if objs is not None:
             out_q.put(("obj", i, objs, screens.ms))
@@ -554,6 +572,7 @@ def live_settings(cfg, overrides=()):
     cfg["timeline"]["hold_miss_s"] = max(cfg["timeline"]["hold_miss_s"], 1.0)   # live sees fewer frames
     if not any(o.startswith("perception.det_thresh=") for o in overrides):
         p["det_thresh"] = 0.35           # catch half-faces at frame edges (fail closed)
+    p.setdefault("hand_face_filter", {"max_score": 0.5, "min_cover": 0.3})   # ...but not hands
     return cfg
 
 
