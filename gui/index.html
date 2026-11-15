@@ -249,7 +249,12 @@ function renderApps(apps) {
        <button onclick="appCtl('${k}', ${a.running ? "'stop'" : "'start'"})">${a.running ? "Stop" : "Start"}</button></div>`).join("");
 }
 function renderRec(rec, glassesOn) {
-  if (!glassesOn) { $("rec").innerHTML = ""; return; }
+  if (!glassesOn) {
+    $("rec").innerHTML = `<div class="app" title="Start the glasses view to record">
+       <button disabled>● Record</button><button disabled>📷 Photo</button>
+       <span class="muted small">start the glasses view to record</span></div>`;
+    return;
+  }
   const secs = rec.recording && rec.since ? Math.max(0, Math.round(Date.now() / 1000 - rec.since)) : 0;
   const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
   $("rec").innerHTML = rec.recording
