@@ -14,3 +14,8 @@ stream/auto.crt
 stream/auto.key
 # agent worktrees
 .claude/
+
+# voice tool runtime state
+profiles/.history/
+profiles/VOICE_STATE.json
+profiles/.*.tmp

@@ -27,6 +27,7 @@ from . import render as R
 from . import timeline
 from .consent import ConsentEngine
 from .tracker import Tracker, select_embeds
+from .voice_hud import VoiceHUD   # voice hook
 
 ROOT = Path(__file__).resolve().parent.parent
 # live detector input long side (1280x720 -> 1280x736 input) and lazy-embedding policy
@@ -141,6 +142,7 @@ class Live:
         self.trace = None
         self.demo = False     # full-screen, filtered-only output for public demos     # optional dict j -> (regions, dets) for live evaluation
         self.lag = 0.0
+        self.vhud = VoiceHUD()   # voice hook: listening / heard / change-card overlay from profiles/VOICE_STATE.json
 
     # ---------- threads ----------
     def _open(self):
@@ -347,7 +349,7 @@ class Live:
         first = self.profile is None
         self.profile = (name, mt)
         print(f"profile: {name} — {prof['description']}")
-        if not first:
+        if not first and not self.vhud.recent():   # voice hook: the voice card + read-back replace banner/say
             self.banner = (f"PROFILE: {name}", time.monotonic() + 4)
             say(f"Profile {name.replace('-', ' ')} active")
 
@@ -453,6 +455,8 @@ class Live:
             if writer is not None:
                 writer.write(frame_out)
 
+            if headless:
+                self.vhud.snap(frame_out)   # voice hook: PF_VOICE_SNAP=<dir> saves overlay stills
             if not headless:
                 disp = frame_out
                 if self.demo and not debug:
@@ -464,6 +468,7 @@ class Live:
                     x = disp.shape[1] - W // 2 - tw // 2 if debug else (W - tw) // 2
                     cv2.rectangle(disp, (x - 20, H - th - 60), (x + tw + 20, H - 20), (40, 160, 40), -1)
                     cv2.putText(disp, txt, (x, H - 40), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (255, 255, 255), 4, cv2.LINE_AA)
+                disp = self.vhud.draw(disp)   # voice hook
                 if disp.shape[1] > 1800 and not self.demo:
                     s = 1800 / disp.shape[1]
                     disp = cv2.resize(disp, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)

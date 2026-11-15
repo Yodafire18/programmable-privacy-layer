@@ -38,5 +38,6 @@ case $MODE in
 esac
 
 echo "keys: q quit · f forget everyone · space photo · r record · d debug overlay"
+echo "voice commands: in a 2nd terminal run  .venv/bin/python -m privacy_filter.voice --adb"
 # caffeinate -d: keep the display awake for the whole demo (it slept mid-run once); -i: no idle sleep
 exec caffeinate -di $PY -m privacy_filter.live --source "$SRC" --demo --delay ${DELAY:-0.75} "$@"

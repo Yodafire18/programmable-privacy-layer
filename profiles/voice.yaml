@@ -1,0 +1,12 @@
+name: voice
+description: Voice-edited copy of default.
+blur_targets:
+- faces
+consent:
+  gesture: peace_sign
+  hands: 2
+  hold_s: 0.75
+revoke:
+  gesture: thumbs_down
+  hands: 2
+blur_strength: medium

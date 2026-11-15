@@ -8,7 +8,12 @@ profiles/<name>.yaml
   consent: {gesture: peace_sign, hands: 2, hold_s: 0.75}
   revoke:  {gesture: thumbs_down, hands: 2}
   blur_strength: medium          # light | medium | strong
+  locked: true                   # optional: save() refuses to overwrite it (the "gold" default)
+
+Every save keeps the previous version in profiles/.history/<name>.json (newest last), so edits can be undone.
 """
+import json
+import os
 import re
 from pathlib import Path
 
@@ -44,7 +49,14 @@ DEFAULT = {
     "consent": {"gesture": "peace_sign", "hands": 2, "hold_s": 0.75},
     "revoke": {"gesture": "thumbs_down", "hands": 2},
     "blur_strength": "medium",
+    "locked": True,
 }
+HISTORY = DIR / ".history"
+HISTORY_N = 20
+
+
+class LockedProfile(PermissionError):
+    pass
 
 
 def slug(name):
@@ -89,6 +101,8 @@ def validate(p):
         problems.append(f"blur_strength '{st}' not one of {', '.join(STRENGTH)}")
         st = "medium"
     out["blur_strength"] = st
+    if p.get("locked"):
+        out["locked"] = True
     return out, problems
 
 
@@ -114,11 +128,77 @@ def to_overrides(profile):
     return o
 
 
-def save(profile):
+def _write_atomic(p, text):
+    """The live app polls these files; never let it read a half-written one."""
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, p)
+
+
+def is_locked(name):
+    p = path(name)
+    if not p.exists():
+        return False
+    try:
+        return bool((yaml.safe_load(p.read_text()) or {}).get("locked"))
+    except Exception:
+        return False
+
+
+def history(name):
+    try:
+        return json.loads((HISTORY / f"{slug(name)}.json").read_text())
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+def _set_history(name, items):
+    HISTORY.mkdir(parents=True, exist_ok=True)
+    _write_atomic(HISTORY / f"{slug(name)}.json", json.dumps(items[-HISTORY_N:], indent=1))
+
+
+def save(profile, keep_history=True):
+    """Validate and write. Refuses (LockedProfile) to overwrite a profile marked `locked: true`.
+    The version being replaced is pushed onto its history (see undo)."""
     DIR.mkdir(exist_ok=True)
     clean, problems = validate(profile)
-    path(clean["name"]).write_text(yaml.safe_dump(clean, sort_keys=False))
+    p = path(clean["name"])
+    if is_locked(clean["name"]):
+        raise LockedProfile(f"profile '{clean['name']}' is locked and can't be changed; "
+                            f"save your edits under another name (e.g. 'voice') instead")
+    if keep_history and p.exists():
+        try:
+            prev = validate(yaml.safe_load(p.read_text()) or {})[0]
+        except Exception:
+            prev = None
+        if prev and not same_rules(prev, clean):
+            _set_history(clean["name"], history(clean["name"]) + [prev])
+    _write_atomic(p, yaml.safe_dump(clean, sort_keys=False))
     return clean, problems
+
+
+def same_rules(a, b):
+    """Equal apart from name/description/lock (a description-only change is not worth an undo step)."""
+    skip = ("name", "description", "locked")
+    return {k: v for k, v in a.items() if k not in skip} == {k: v for k, v in b.items() if k not in skip}
+
+
+def undo(name):
+    """Restore the previous saved version of `name` that differs from the current one.
+    Returns it, or None if there is no history."""
+    if is_locked(name):
+        raise LockedProfile(f"profile '{slug(name)}' is locked")
+    items = history(name)
+    cur = load(name) if path(name).exists() else None
+    while items and cur is not None and same_rules(validate(items[-1])[0], cur):
+        items.pop()
+    if not items:
+        _set_history(name, items)
+        return None
+    prev = items.pop()
+    _write_atomic(path(name), yaml.safe_dump(validate(prev)[0], sort_keys=False))
+    _set_history(name, items)
+    return load(name)
 
 
 def load(name):
@@ -135,7 +215,7 @@ def names():
 def activate(name):
     load(name)                     # must exist and parse
     DIR.mkdir(exist_ok=True)
-    ACTIVE.write_text(slug(name) + "\n")
+    _write_atomic(ACTIVE, slug(name) + "\n")
 
 
 def active_name():
@@ -145,5 +225,8 @@ def active_name():
 def ensure_default():
     if not path("default").exists():
         save(DEFAULT)
+    if not path("voice").exists():          # voice edits go here; default stays untouched
+        save({**load("default"), "name": "voice", "locked": False,
+              "description": "Voice-edited copy of default."}, keep_history=False)
     if not active_name():
         activate("default")

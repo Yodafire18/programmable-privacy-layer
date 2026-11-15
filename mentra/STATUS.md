@@ -70,3 +70,9 @@ Only 2 of 894 frames had no face. Best case (same light, seconds apart). Suggest
 From the docs (verified): Bluetooth SDK `startStream()` sends to an `rtmp://`, `rtmps://`, `srt://` or WHIP URL, with
 `video {width,height,bitrate,fps}`. The SDK and the glasses software must be the same release (3.4.0 in the current docs).
 macOS support is only on the starter kit's `dev` branch. Target URL: `rtmp://<mac-ip>:1935/live/mentra` (MediaMTX, `stream/server.sh`).
+
+## Voice commands (`python -m privacy_filter.voice`)
+- **Mic:** "Mentra Microphone" is found by name through sounddevice (index 0, 44.1 kHz, 2 ch); fallback is the default input. Recording from it was **not** tested (no speaker available); the first real recording will ask for macOS microphone permission for the terminal app.
+- **Speech-to-text:** faster-whisper `base.en` int8 on CPU (2 threads), ~140 MB in `~/.cache/huggingface`. 0.33–0.8 s per 2–3 s command while the live app runs.
+- **Glasses buttons over ADB (verified):** `adb devices` lists `MentraLive` as `device` (authorized, no dialog). `adb shell getevent -lp` shows three key devices: `mtk-kpd` (event0: VOLUMEDOWN, VOLUMEUP, MENU, BACK), `mtk-pmic-keys` (event1: VOLUMEUP, POWER), `mt63xx-accdet Headset` (event2). **Not verified:** which of these the physical button produces; it may also be handled by the glasses' MCU and never reach `/dev/input`.
+- **How to verify the button (1 minute):** run `adb shell getevent -lt`, short-press each glasses button (don't hold one: a long press on a POWER key may turn the glasses off), and watch for a line like `/dev/input/event0: EV_KEY KEY_xxx DOWN`. If one appears, `python -m privacy_filter.voice --adb` already maps it to "start recording" (any key DOWN; press again to stop). If nothing appears, the button doesn't reach Android input over USB: use Enter on the Mac. The listener only runs `adb devices` and `adb shell getevent -l` (read-only).
