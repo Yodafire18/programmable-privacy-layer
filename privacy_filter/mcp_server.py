@@ -28,14 +28,18 @@ def list_capabilities() -> dict:
     PR.ensure_default()
     return {
         "blur_targets": PR.SUPPORTED_TARGETS,
-        "not_supported_yet": "objects (license plates, cards, documents, X-rays, brands), children-only rules, "
-                             "per-person rules other than gesture consent",
+        "not_supported_yet": "other objects (license plates, cards, paper documents, X-rays, brands), "
+                             "reading what is ON a screen (screens are blurred whole, whatever they show), "
+                             "turning face blurring off, children-only rules, per-person rules other than gesture consent",
         "gestures": list(PR.GESTURES),
         "gesture_hands": [1, 2],
         "blur_strengths": list(PR.STRENGTH),
         "behaviour": "Faces are blurred by default. A person who makes the consent gesture (held hold_s seconds) "
                      "is unblurred and remembered for the session; the revoke gesture blurs them again. "
-                     "Uncertain matches stay blurred.",
+                     "Uncertain matches stay blurred. If the profile lists 'screens', phones, laptops and "
+                     "monitors/TVs are also blurred (rectangle) whenever the detector finds them; screens are never "
+                     "unblurred by consent. Screen detection is a small general-purpose detector: it can miss "
+                     "screens at an angle, far away, or partly covered, so treat it as best-effort.",
         "profiles": PR.names(),
         "active_profile": PR.active_name(),
     }
@@ -73,7 +77,8 @@ def test_profile(name: str) -> dict:
         "what_was_tested": "Blur coverage on synthetic clips (slow pan, whip pan, zoom): every face must stay blurred. "
                            "leak_frames = frames where a face was not fully covered; false_visible = someone unblurred "
                            "without consent. The synthetic clips contain no gestures, so the consent gesture itself "
-                           "is not exercised here; try it live after activating.",
+                           "is not exercised here; try it live after activating. Screens are not tested here either "
+                           "(see python -m eval.screen_eval).",
     }
 
 

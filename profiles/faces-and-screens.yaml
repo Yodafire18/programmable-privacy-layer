@@ -1,0 +1,14 @@
+name: faces-and-screens
+description: Blur every face and every screen (phones, laptops, monitors/TVs); two peace signs to be seen,
+  two thumbs down to go back. Screens are always blurred.
+blur_targets:
+- faces
+- screens
+consent:
+  gesture: peace_sign
+  hands: 2
+  hold_s: 0.75
+revoke:
+  gesture: thumbs_down
+  hands: 2
+blur_strength: medium

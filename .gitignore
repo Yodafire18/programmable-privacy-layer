@@ -12,3 +12,5 @@ profiles/ACTIVE
 # auto-generated TLS material from mediamtx
 stream/auto.crt
 stream/auto.key
+# agent worktrees
+.claude/

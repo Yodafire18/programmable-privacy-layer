@@ -15,6 +15,24 @@ def mask_at(xs, ys, region, feather):
     return m * region["blur"]
 
 
+def mask_rect_at(xs, ys, region, feather):
+    """Blur weight of a rounded, feathered rectangle (screens). Superellipse |u|^p+|v|^p: p=8 is a
+    rectangle with softly rounded corners."""
+    x1, y1, x2, y2 = region["box"]
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    a, b = max((x2 - x1) / 2, 1), max((y2 - y1) / 2, 1)
+    r = (np.abs((xs - cx) / a) ** 8 + np.abs((ys - cy) / b) ** 8) ** 0.125
+    m = np.clip((1 - r) / max(feather, 1e-6), 0, 1)
+    return m * region["blur"]
+
+
+def mask_for(xs, ys, region, feather):
+    """Shape dispatch: faces are ellipses (mask_at); regions with shape=rect use their own feather."""
+    if region.get("shape") == "rect":
+        return mask_rect_at(xs, ys, region, region.get("feather", feather))
+    return mask_at(xs, ys, region, feather)
+
+
 def coverage(gt_box, regions, feather, thresh=0.9, grid=9):
     """Fraction of a GT face box that is blurred at >= thresh."""
     if not regions:
@@ -59,7 +77,7 @@ def render(frame, regions, rcfg):
         gw, gh = min(rw, 96), min(rh, max(2, int(96 * rh / rw)))
         gx = x1 + (np.arange(gw, dtype=np.float32) + 0.5) * rw / gw
         gy = y1 + (np.arange(gh, dtype=np.float32) + 0.5) * rh / gh
-        m = mask_at(gx[None, :], gy[:, None], r, rcfg["feather"]).astype(np.float32)
+        m = mask_for(gx[None, :], gy[:, None], r, rcfg["feather"]).astype(np.float32)
         m = cv2.resize(m, (rw, rh), interpolation=cv2.INTER_LINEAR)
         out[y1:y2, x1:x2] = cv2.blendLinear(blurred, crop, m, 1.0 - m)
     return out
