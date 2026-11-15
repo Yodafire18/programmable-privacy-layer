@@ -28,7 +28,11 @@ GESTURES = {
     "pointing_up": "Pointing_Up",
     "i_love_you": "ILoveYou",
 }
-SUPPORTED_TARGETS = {"faces": "every human face in view (detected with SCRFD, tracked, remembered on consent)"}
+SUPPORTED_TARGETS = {
+    "faces": "every human face in view (detected with SCRFD, tracked, remembered on consent)",
+    "screens": "phones, laptops, monitors/TVs (YOLOv8n COCO classes; rectangular blur, always on, never consentable; "
+               "detector only runs when a profile lists screens)",
+}
 STRENGTH = {"light": {"pixel_cells": 14, "feather": 0.3},
             "medium": {"pixel_cells": 10, "feather": 0.25},
             "strong": {"pixel_cells": 6, "feather": 0.2}}
@@ -63,6 +67,9 @@ def validate(p):
     if bad:
         problems.append(f"blur target(s) not supported yet: {', '.join(bad)} (supported: {', '.join(SUPPORTED_TARGETS)})")
     out["blur_targets"] = [t for t in targets if t in SUPPORTED_TARGETS] or ["faces"]
+    if "faces" not in out["blur_targets"]:
+        problems.append("faces are always blurred (they can't be turned off); added 'faces'")
+        out["blur_targets"].insert(0, "faces")
     for key, default in (("consent", DEFAULT["consent"]), ("revoke", DEFAULT["revoke"])):
         r = {**default, **(p.get(key) or {})}
         if r["gesture"] not in GESTURES:
@@ -93,6 +100,7 @@ def to_cfg(profile, cfg):
     cfg["consent"]["hands_required"] = c["hands"]
     cfg["consent"]["hold_s"] = c["hold_s"]
     cfg["render"].update(STRENGTH[profile["blur_strength"]])
+    cfg.setdefault("objects", {})["screens"] = "screens" in profile["blur_targets"]
     return cfg
 
 
@@ -102,6 +110,7 @@ def to_overrides(profile):
     o = [f"consent.consent_gesture={GESTURES[c['gesture']]}", f"consent.revoke_gesture={GESTURES[r['gesture']]}",
          f"consent.hands_required={c['hands']}", f"consent.hold_s={c['hold_s']}"]
     o += [f"render.{k}={v}" for k, v in STRENGTH[profile["blur_strength"]].items()]
+    o.append(f"objects.screens={'true' if 'screens' in profile['blur_targets'] else 'false'}")
     return o
 
 

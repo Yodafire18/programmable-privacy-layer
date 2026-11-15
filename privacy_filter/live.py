@@ -48,6 +48,8 @@ def _perception_worker(cfg, req_ev, in_q, out_q, cmd_q):
     P = Perception(cfg["perception"], video=True)
     tracker = Tracker(cfg["tracker"])
     consent = ConsentEngine(cfg["consent"], video=True)
+    from .objects import ScreenStage
+    screens = ScreenStage(cfg)            # screens hook: no model loaded / run unless the profile enables it
     out_q.put(("ready",))
     n_ev = 0
     while True:
@@ -58,6 +60,8 @@ def _perception_worker(cfg, req_ev, in_q, out_q, cmd_q):
                     consent.forget_all()
                 elif isinstance(c, tuple) and c[0] == "config":
                     consent.cfg = c[1]            # new profile; consented people stay remembered
+                    if len(c) > 2:
+                        screens.configure(c[2])   # objects cfg (screens on/off)
         except queue.Empty:
             pass
         req_ev.set()                      # ask for the newest frame
@@ -65,7 +69,11 @@ def _perception_worker(cfg, req_ev, in_q, out_q, cmd_q):
         if item is None:
             break
         i, t, img = item
+        screens.submit(img)               # runs alongside P() when objects.parallel
         fr = P(img, t)
+        objs = screens.result()
+        if objs is not None:
+            out_q.put(("obj", i, objs, screens.ms))
         faces = fr["faces"]
         tids = tracker.update(faces)
         states = consent.step(t, faces, tids, fr["hands"], tracker)
@@ -86,6 +94,8 @@ class Live:
         self.frames = {}      # idx -> (t, img, arrival)
         self.logic = {}       # idx -> dets   (only for perceived frames)
         self.hands = {}       # idx -> hands
+        self.objs = {}        # idx -> object dets (screens), only for frames the object detector ran on
+        self.obj_ms, self.n_obj = 0.0, 0
         self.latest = -1      # newest captured idx
         self.done = -1        # newest perceived idx
         self.ended = False    # source exhausted
@@ -195,6 +205,12 @@ class Live:
             if msg[0] == "ready":
                 self.ready.set()
                 continue
+            if msg[0] == "obj":
+                self.obj_ms = 0.8 * self.obj_ms + 0.2 * msg[3] if self.n_obj else msg[3]
+                self.n_obj += 1
+                with self.lock:
+                    self.objs[msg[1]] = msg[2]
+                continue
             _, i, dets, hands, ms, new_ev, mem_n = msg
             self.ms = {k: 0.8 * self.ms[k] + 0.2 * v for k, v in ms.items()}
             for t, kind, tid in new_ev:
@@ -220,7 +236,11 @@ class Live:
             b = min(max(j, self.done), j + ahead)   # never look further than the buffer (bounded cost)
             win = [self.logic.get(i, []) for i in range(a, b + 1)]
             perceived = {i: len(self.logic[i]) for i in range(a, b + 1) if i in self.logic}
+            owin = [self.objs.get(i, []) for i in range(a, b + 1)] if self.objs else None
         regs = timeline.build(win, fps, tl, self.cfg["render"], size)[j - a]
+        if owin:
+            from .objects import object_regions
+            regs = regs + object_regions(owin, fps, self.cfg, size)[j - a]
         if self._dropout(j, perceived, fps):
             W, H = size
             regs = regs + [{"tid": -1, "box": [-W, -H, 2 * W, 2 * H], "blur": 1.0}]
@@ -282,7 +302,7 @@ class Live:
             self.profile = (name, mt)
             return
         PR.to_cfg(prof, self.cfg)
-        self.cmd_q.put(("config", dict(self.cfg["consent"])))
+        self.cmd_q.put(("config", dict(self.cfg["consent"]), dict(self.cfg.get("objects", {}))))
         first = self.profile is None
         self.profile = (name, mt)
         print(f"profile: {name} — {prof['description']}")
@@ -440,7 +460,7 @@ class Live:
                 for k in [k for k in self.frames if k <= j]:
                     del self.frames[k]
                 cutoff = j - int(self.fps_in * (self.cfg["timeline"]["hold_miss_s"] + self.cfg["timeline"]["fade_s"] + 1.5))
-                for d in (self.logic, self.hands):
+                for d in (self.logic, self.hands, self.objs):
                     for k in [k for k in d if k < cutoff]:
                         del d[k]
             j += 1
@@ -459,6 +479,8 @@ class Live:
                   f"work p50 {np.percentile(work_ms, 50):.0f}ms p95 {np.percentile(work_ms, 95):.0f}ms · skips {self.skipped} · "
                   f"faces {self.ms['faces']:.0f}ms hands {self.ms['hands']:.0f}ms · "
                   f"detection updates {getattr(self, 'n_perceived', 0) / max(1e-6, out_times[-1] - t_start):.1f}/s")
+        if self.n_obj:
+            print(f"screens: detector {self.obj_ms:.0f}ms · {self.n_obj / max(1e-6, time.monotonic() - t_start):.1f} runs/s")
         if getattr(self, "cap_t0", None):
             print(f"capture: {self.n_captured / max(1e-6, self.cap_t1 - self.cap_t0):.1f} fps")
         n_c = sum(1 for e in self.events if e[1] == "consent")
