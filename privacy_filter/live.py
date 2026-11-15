@@ -12,6 +12,7 @@ Run:
 Keys: q quit · f forget everyone · space save photo · r record on/off · d toggle debug panel
 """
 import argparse
+import json
 import os
 import subprocess
 import threading
@@ -51,6 +52,21 @@ def find_camera(name):
         if name.lower() in m.group(2).lower():
             return int(m.group(1))
     return None
+
+
+def finalize_recording(raw_path, wait=False):
+    """mp4v (fast to write) -> H.264 that plays everywhere (QuickTime, TikTok); runs in the background."""
+    raw = Path(raw_path)
+    if not raw.name.endswith(".raw.mp4"):
+        print("wrote", raw)
+        return
+    final = raw.with_name(raw.name.replace(".raw.mp4", ".mp4"))
+    cmd = (f"ffmpeg -loglevel error -y -i '{raw}' -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p "
+           f"-movflags +faststart '{final}' && rm -f '{raw}'")
+    p = subprocess.Popen(["sh", "-c", cmd])
+    print("saved", final)
+    if wait:
+        p.wait()
 
 
 class NamedCamera:
@@ -367,6 +383,25 @@ class Live:
         nxt = [i for i in perceived if j < i <= j + span and perceived[i] > 0]
         return bool(prev) and bool(nxt)
 
+    CTL = OUT / ".control.json"     # written by the GUI: {"seq": n, "cmd": "record"|"stop"|"photo"}
+    LIVE = OUT / ".live.json"       # read by the GUI: recording state
+
+    def _read_ctl(self):
+        try:
+            return json.loads(self.CTL.read_text())
+        except Exception:
+            return {}
+
+    def _write_live(self, recording, path, t0):
+        try:
+            tmp = self.LIVE.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"running": True, "recording": recording, "since": t0,
+                                       "file": Path(path).name.replace(".raw", "") if path else None,
+                                       "updated": time.time(), "pid": os.getpid()}))
+            tmp.replace(self.LIVE)
+        except Exception:
+            pass
+
     def _badge(self, img, j):
         with self.lock:
             k = j
@@ -436,6 +471,7 @@ class Live:
         writer, rec_path = None, None
         if out_path:
             rec_path = Path(out_path)
+        want, rec_t0, ctl_seq = None, None, self._read_ctl().get("seq")   # GUI record/photo control
         j = 0
         shown = 0
         out_times = []
@@ -451,6 +487,10 @@ class Live:
             if time.monotonic() - getattr(self, "_last_pcheck", 0) > 0.5:
                 self._last_pcheck = time.monotonic()
                 self.check_profile()
+                ctl = self._read_ctl()
+                if ctl.get("seq") != ctl_seq:
+                    ctl_seq, want = ctl.get("seq"), ctl.get("cmd")
+                self._write_live(writer is not None, rec_path, rec_t0)
             with self.lock:
                 item = self.frames.get(j)
                 latest = self.latest
@@ -516,14 +556,34 @@ class Live:
                     cv2.circle(dbg, (W - 20, 20), 8, (0, 0, 255), -1)
                 frame_out = np.hstack([dbg, filt])
 
-            if rec_path and writer is None:
-                writer = cv2.VideoWriter(str(rec_path), cv2.VideoWriter_fourcc(*"mp4v"),
-                                         round(self.fps_in) or 30, (frame_out.shape[1], frame_out.shape[0]))
-            if writer is not None:
-                writer.write(frame_out)
+            if want == "photo":
+                p = OUT / f"photo_{time.strftime('%H%M%S')}.jpg"
+                cv2.imwrite(str(p), filt)
+                print("saved", p)
+                self.banner = ("PHOTO SAVED", time.monotonic() + 1.5)
+                want = None
+            elif want == "record" and writer is None and rec_path is None:
+                rec_path = OUT / f"clip_{time.strftime('%H%M%S')}.raw.mp4"
+                rec_t0 = time.time()
+                print("recording", rec_path)
+                want = None
+            elif want == "stop":
+                if writer is not None:
+                    writer.release()
+                    finalize_recording(rec_path)
+                writer, rec_path, rec_t0, want = None, None, None, None
+                self._write_live(False, None, None)
+            elif want in ("record",):
+                want = None
+            rec_frame = frame_out
 
             if headless:
                 self.vhud.snap(frame_out)   # voice hook: PF_VOICE_SNAP=<dir> saves overlay stills
+                if rec_path and writer is None:
+                    writer = cv2.VideoWriter(str(rec_path), cv2.VideoWriter_fourcc(*"mp4v"),
+                                             round(self.fps_in) or 30, (frame_out.shape[1], frame_out.shape[0]))
+                if writer is not None:
+                    writer.write(frame_out)
             if not headless:
                 disp = frame_out
                 if self.demo and not debug:
@@ -536,9 +596,16 @@ class Live:
                     cv2.rectangle(disp, (x - 20, H - th - 60), (x + tw + 20, H - 20), (40, 160, 40), -1)
                     cv2.putText(disp, txt, (x, H - 40), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (255, 255, 255), 4, cv2.LINE_AA)
                 disp = self.vhud.draw(disp)   # voice hook
+                rec_frame = disp              # record what the audience sees (badge, banners, captions)
                 if disp.shape[1] > 1800 and not self.demo:
                     s = 1800 / disp.shape[1]
                     disp = cv2.resize(disp, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+                if rec_path and writer is None:
+                    writer = cv2.VideoWriter(str(rec_path), cv2.VideoWriter_fourcc(*"mp4v"),
+                                             round(self.fps_in) or 30, (rec_frame.shape[1], rec_frame.shape[0]))
+                if writer is not None:
+                    writer.write(rec_frame)
+                    cv2.circle(disp, (disp.shape[1] - 24, 24), 10, (0, 0, 255), -1)   # REC dot (not recorded)
                 cv2.imshow(WIN, disp)
                 self._status_img = disp
                 key = cv2.waitKey(1) & 0xFF
@@ -548,24 +615,16 @@ class Live:
                     self.cmd_q.put("forget")
                     say("Forgot everyone")
                 if key == ord(" "):
-                    p = OUT / f"photo_{time.strftime('%H%M%S')}.jpg"
-                    cv2.imwrite(str(p), filt)
-                    say("Saved")
-                    print("saved", p)
+                    want = "photo"
                 if key == ord("r"):
-                    if writer is None:
-                        rec_path = OUT / f"clip_{time.strftime('%H%M%S')}.mp4"
-                        print("recording", rec_path)
-                    else:
-                        writer.release()
-                        writer, rec_path = None, None
-                        print("recording stopped")
+                    want = "stop" if (writer is not None or rec_path is not None) else "record"
                 if key == ord("d"):
                     debug = not debug
                     if writer is not None:      # frame size changes; start a new file
                         writer.release()
+                        finalize_recording(rec_path)
                         writer = None
-                        rec_path = OUT / f"clip_{time.strftime('%H%M%S')}.mp4"
+                        rec_path = OUT / f"clip_{time.strftime('%H%M%S')}.raw.mp4"
 
             work_ms.append((time.perf_counter() - w0) * 1000)
             # images are only needed until shown; detections are kept for the smoothing window
@@ -582,7 +641,11 @@ class Live:
         self.stop = True
         if writer is not None:
             writer.release()
-            print("wrote", rec_path)
+            if str(rec_path).endswith(".raw.mp4"):
+                finalize_recording(rec_path, wait=True)
+            else:
+                print("wrote", rec_path)
+        self._write_live(False, None, None)
         if not headless:
             cv2.destroyAllWindows()
         if len(out_times) > 60:

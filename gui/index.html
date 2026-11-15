@@ -123,6 +123,7 @@
   <div class="muted small" id="liveWhen"></div>
   <div class="spacer"></div>
   <div class="apps" id="apps"></div>
+  <div class="apps" id="rec"></div>
   <h1>🕶️ Privacy Filter</h1>
 </div>
 
@@ -131,6 +132,10 @@
     <section class="panel">
       <h2>Profiles</h2>
       <div id="cards"><div class="muted">Loading profiles…</div></div>
+    </section>
+    <section class="panel" id="mediaPanel" hidden>
+      <h2>Recordings &amp; photos</h2>
+      <div id="mediaList" class="small"></div>
     </section>
     <section class="panel voice" id="voicePanel" hidden>
       <h2>🎙️ Voice</h2>
@@ -233,6 +238,8 @@ function renderStatus(st) {
   if (lastActive !== null && lastActive !== st.active) { const s = $("strip"); s.classList.remove("flash"); void s.offsetWidth; s.classList.add("flash"); }
   lastActive = st.active;
   renderApps(st.apps || {});
+  renderRec(st.rec || {}, (st.apps && st.apps.glasses && st.apps.glasses.running) || false);
+  renderMedia(st.media || []);
   const vp = $("voicePanel");
   if (st.voice) { vp.hidden = false; renderVoice(st.voice); } else vp.hidden = true;
 }
@@ -241,6 +248,33 @@ function renderApps(apps) {
     `<div class="app ${a.running ? "on" : ""}"><span class="led"></span>${esc(a.label)}
        <button onclick="appCtl('${k}', ${a.running ? "'stop'" : "'start'"})">${a.running ? "Stop" : "Start"}</button></div>`).join("");
 }
+function renderRec(rec, glassesOn) {
+  if (!glassesOn) { $("rec").innerHTML = ""; return; }
+  const secs = rec.recording && rec.since ? Math.max(0, Math.round(Date.now() / 1000 - rec.since)) : 0;
+  const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+  $("rec").innerHTML = rec.recording
+    ? `<div class="app on"><span class="led" style="background:#ef4444;box-shadow:0 0 8px #ef4444"></span>REC ${mmss}
+         <button onclick="recCtl('stop')">Stop &amp; save</button></div>`
+    : `<div class="app"><button onclick="recCtl('record')">● Record</button>
+         <button onclick="recCtl('photo')">📷 Photo</button></div>`;
+}
+function renderMedia(items) {
+  const mp = $("mediaPanel");
+  if (!items.length) { mp.hidden = true; return; }
+  mp.hidden = false;
+  $("mediaList").innerHTML = items.map(m =>
+    `<div style="display:flex;gap:.6rem;align-items:center;margin:.25rem 0">
+       <span>${m.kind === "video" ? "🎬" : "📷"}</span><span>${esc(m.name)}</span>
+       <span class="muted">${m.mb} MB · ${ago(m.t)}</span>
+       <button onclick="reveal('${esc(m.name)}')">Show in Finder</button></div>`).join("");
+}
+async function recCtl(cmd) {
+  try {
+    await api("/api/rec", { cmd });
+    toast(cmd === "record" ? "Recording…" : cmd === "stop" ? "Saving recording…" : "Photo saved");
+  } catch (e) { toast(e.message, true); }
+}
+async function reveal(name) { try { await api("/api/reveal", { name }); } catch (e) { toast(e.message, true); } }
 async function appCtl(key, action) {
   try {
     const r = await api(`/api/apps/${action}`, { app: key });

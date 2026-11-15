@@ -78,6 +78,37 @@ def stop_app(key):
     return {"stopped": bool(pids)}
 
 
+# ---------- recording / photos (the live app polls output/.control.json) ----------
+OUT = ROOT / "output"
+
+
+def live_rec():
+    try:
+        d = json.loads((OUT / ".live.json").read_text())
+    except Exception:
+        return {"recording": False}
+    if not app_pids("glasses") or time.time() - d.get("updated", 0) > 5:
+        d["recording"] = False
+    return d
+
+
+def recent_media(n=6):
+    if not OUT.exists():
+        return []
+    files = [f for f in OUT.iterdir() if f.suffix in (".mp4", ".jpg") and ".raw." not in f.name
+             and f.name.startswith(("clip_", "photo_"))]
+    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    return [{"name": f.name, "kind": "video" if f.suffix == ".mp4" else "photo",
+             "mb": round(f.stat().st_size / 1e6, 1), "t": f.stat().st_mtime} for f in files[:n]]
+
+
+def send_ctl(cmd):
+    OUT.mkdir(exist_ok=True)
+    tmp = OUT / ".control.tmp"
+    tmp.write_text(json.dumps({"seq": time.time(), "cmd": cmd}))
+    tmp.replace(OUT / ".control.json")
+
+
 # ---------- helpers ----------
 
 def raw(name):
@@ -118,6 +149,8 @@ def status():
            "now": time.time(),
            "voice": None,
            "apps": apps_status(),
+           "rec": live_rec(),
+           "media": recent_media(),
            "fingerprint": None}
     if VOICE_STATE.exists():
         try:
@@ -330,6 +363,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {"status": status()})
             if p == "/api/test":
                 return self.send(200, run_test(b["name"]))
+            if p == "/api/rec":
+                cmd = b.get("cmd")
+                if cmd not in ("record", "stop", "photo"):
+                    return self.send(400, {"error": "cmd must be record, stop or photo"})
+                if not app_pids("glasses"):
+                    return self.send(409, {"error": "Start the glasses view first"})
+                send_ctl(cmd)
+                return self.send(200, {"ok": True})
+            if p == "/api/reveal":
+                f = OUT / Path(str(b.get("name", ""))).name          # only files inside output/
+                if not f.exists():
+                    return self.send(404, {"error": "file not found"})
+                subprocess.run(["open", "-R", str(f)])
+                return self.send(200, {"ok": True})
             if p in ("/api/apps/start", "/api/apps/stop"):
                 key = b.get("app")
                 if key not in APPS:
