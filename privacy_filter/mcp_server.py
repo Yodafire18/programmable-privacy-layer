@@ -62,6 +62,16 @@ def save_profile(name: str, description: str, consent_gesture: str = "peace_sign
             "note": "Saved but not active. Run test_profile, then activate_profile."}
 
 
+def friendly_summary(m):
+    """One plain-English sentence from an eval metrics.json (shared with the GUI)."""
+    tot, clips = m["totals"], m["clips"]
+    frames = sum(c["frames"] for c in clips.values())
+    leaks, wrong = tot["leak_frames"], tot["false_visible_frames"]
+    return (f"Tested on {len(clips)} moving-camera clips ({frames} frames): nobody was wrongly unblurred "
+            f"({wrong} frames), and a face was briefly not fully covered in {leaks} frames "
+            f"({100 * leaks / max(frames, 1):.1f}%), mostly during fast camera motion.")
+
+
 @server.tool()
 def test_profile(name: str) -> dict:
     """Run the profile through the synthetic test clips (moving-camera group shots) and report privacy leaks.
@@ -71,16 +81,27 @@ def test_profile(name: str) -> dict:
     cmd = [sys.executable, "-m", "eval", "run", "--name", f"profile-{prof['name']}",
            "--clips", "synth_slow_pan,synth_whip,synth_zoom", "--set", *PR.to_overrides(prof)]
     r = subprocess.run(cmd, cwd=PR.ROOT, capture_output=True, text=True, timeout=600)
-    lines = [l for l in r.stdout.splitlines() if l.startswith(("GATES", "TOTAL", "synth", "clip", "  LEAK"))]
+    import json
+    mp = PR.ROOT / "runs" / f"profile-{prof['name']}" / "metrics.json"
+    if r.returncode != 0 or not mp.exists():
+        return {"profile": prof["name"], "ran": False, "summary": "The test could not run.", "error": r.stderr[-800:]}
+    m = json.loads(mp.read_text())
+    tot, clips = m["totals"], m["clips"]
+    frames = sum(c["frames"] for c in clips.values())
+    leaks, wrong = tot["leak_frames"], tot["false_visible_frames"]
+    summary = friendly_summary(m)
+    per_clip = {name.replace("synth_", "").replace("_", " "): f"{c['leak_frames']} of {c['frames']} frames"
+                for name, c in clips.items()}
     return {
         "profile": prof["name"],
-        "ok": r.returncode == 0,
-        "report": "\n".join(lines) or r.stderr[-1500:],
-        "what_was_tested": "Blur coverage on synthetic clips (slow pan, whip pan, zoom): every face must stay blurred. "
-                           "leak_frames = frames where a face was not fully covered; false_visible = someone unblurred "
-                           "without consent. The synthetic clips contain no gestures, so the consent gesture itself "
-                           "is not exercised here; try it live after activating. Screens are not tested here either "
-                           "(see python -m eval.screen_eval).",
+        "ran": True,
+        "summary": summary,
+        "wrongly_unblurred_frames": wrong,
+        "briefly_uncovered_frames": leaks,
+        "per_clip_uncovered": per_clip,
+        "not_covered_by_this_test": "Consent gestures and screens are checked live, not in these clips.",
+        "how_to_describe_it": "Report the numbers in the summary as they are. Don't call the result a pass or a "
+                              "fail, and don't call it a guarantee.",
     }
 
 

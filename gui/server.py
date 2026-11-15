@@ -102,7 +102,17 @@ def test_results(name):
             "tested_with": {"consent": cfg.get("consent", {}).get("consent_gesture"),
                             "revoke": cfg.get("consent", {}).get("revoke_gesture"),
                             "hands": cfg.get("consent", {}).get("hands_required")},
-            "summary": (d / "summary.txt").read_text() if (d / "summary.txt").exists() else ""}
+            "summary": _friendly(d)}
+
+
+def _friendly(d):
+    """Plain-English summary (no PASS/FAIL gate labels) built from metrics.json."""
+    try:
+        import json as _j
+        from privacy_filter.mcp_server import friendly_summary
+        return friendly_summary(_j.loads((d / "metrics.json").read_text()))
+    except Exception:
+        return ""
 
 
 def run_test(name):

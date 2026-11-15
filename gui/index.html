@@ -393,15 +393,15 @@ function renderTest(running) {
   b.innerHTML = `
     <div class="muted small" style="margin-bottom:.7rem">Last run ${ago(t.ran_at)} · ${new Date(t.ran_at * 1000).toLocaleString()}</div>
     <div class="stats">
-      ${stat(tot.leak_frames, "frames where a face leaked")}
-      ${stat(tot.false_visible_frames, "unblurred without consent")}
+      ${stat(tot.leak_frames, "frames a face was briefly not fully covered")}
+      ${stat(tot.false_visible_frames, "people wrongly unblurred")}
       <div class="stat"><div class="v">${(t.clips || []).length}</div><div class="k">test clips</div></div>
     </div>
-    <table class="clips"><tr><th>Clip</th><th>Length</th><th>Frames</th><th>Leak frames</th><th>False visible</th></tr>
+    <table class="clips"><tr><th>Clip</th><th>Length</th><th>Frames</th><th>Briefly uncovered</th><th>Wrongly unblurred</th></tr>
       ${(t.clips || []).map(c => `<tr><td>${esc(c.clip.replace(/^synth_/, "").replace(/_/g, " "))}</td><td>${c.duration_s ?? ""} s</td>
         <td>${c.frames ?? ""}</td><td>${c.leak_frames ?? ""}</td><td>${c.false_visible_frames ?? ""}</td></tr>`).join("")}
     </table>
-    <details><summary>Full report</summary><pre>${esc(t.summary)}</pre></details>`;
+    <p class="plain">${esc(t.summary)}</p>`;
 }
 async function runTest() {
   const name = S.selected; renderTest(true); $("testBtn").disabled = true;
