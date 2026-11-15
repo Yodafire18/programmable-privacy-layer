@@ -1,11 +1,29 @@
 # Programmable Privacy Layer
 
-**Describe, in plain English, what your camera should never capture. Test it. Then wear it.**
+## Describe, in plain English, what your camera should never capture. Test it. Then wear it.
 
-A privacy filter for camera glasses (built for Mentra Live at the Immerse the Bay hackathon).
-- Every face is blurred by default.
-- People who show **two peace signs** ✌️✌️ become visible; **two thumbs-down** hides them again.
-- Rules live in **profiles** that anyone can write in plain English through an **MCP server**, from Claude, a web dashboard, or by talking to the glasses.
+Camera glasses are here, and everyone around you is in the shot. Every person we showed this to wanted different rules:
+- the **vlogger** livestreaming their life wants bystanders and license plates gone
+- the **doctor** wants documents, X-rays and children's faces gone
+- the **streamer** wants the drink brand they hate covered up
+
+That told us the answer isn't one more filter. **It's a programmable privacy layer:** one engine, and every rule written in natural language.
+
+**MCP is the magic.** Rules become beautiful, testable, natural language:
+
+> *"Blur faces, but let people who show two peace signs unblur, so they can consent to be photographed."*
+
+That sentence becomes a live profile on the glasses in about a second. Any AI agent, app, dashboard, or the wearer's own voice speaks to it through the same MCP tools. **Describe it. Test it on synthetic footage. Tune it. Wear it, on glasses or anything with a camera.**
+
+### Running today, live on Mentra Live glasses
+- Every face blurred by default, failing closed.
+- **✌️✌️ to be seen, 👎👎 to disappear again**: consent by gesture, remembered for the session, wiped on exit.
+- **Talk to your glasses:** *"also blur screens"*, and it's done in about a second.
+- **Type a rule into the dashboard** or ask Claude; it lands on the glasses in about a second.
+- Tested on synthetic moving-camera footage, crowds included.
+
+### Where it goes
+The engine is built so every new detector is a new rule anyone can write: license plates, documents, X-rays, brand logos. The same profile follows you from glasses to headset to webcam to livestream server. Doctors author on a headset; vloggers stream clean; streamers control their frame.
 
 ## What it does
 - **Faces blurred by default**, with fail-closed tracking (lost faces stay blurred; the whole frame blurs during whip pans).
