@@ -1,11 +1,12 @@
 """Voice commands -> live privacy profile.
 
-  trigger (Enter in this terminal, or a glasses button via adb)
-    -> record "Mentra Microphone" until silence (max ~6 s)
-    -> speech-to-text on the Mac (faster-whisper, local)
+  trigger (Enter in this terminal, or a glasses button via adb; --handsfree: just talk)
+    -> start chime, record "Mentra Microphone" until silence (max ~6 s)
+    -> end chime (instant ack), speech-to-text on the Mac (faster-whisper, local)
     -> intent: fast local parser for common phrasings, else `claude -p` + our MCP server
+       (a spoken filler like "Mm, one sec" covers Claude's few seconds; Claude also answers questions/chit-chat)
     -> profile `voice` saved + activated (the live app reloads within ~0.5 s)
-    -> read-back built from the validated profile + diff (never from LLM prose): Mac `say` + card in the live app
+    -> read-back built from the validated profile + diff (never from LLM prose), phrased warmly: Mac `say` + card in the live app
 
 Rules: `default` is locked (gold) and never edited; voice may switch back to it. Edits go to `voice`, built on top
 of whatever is active right now, and are activated at once. "undo" restores the previous `voice` version.
@@ -15,12 +16,14 @@ Run (own terminal, next to ./demo.sh):
   .venv/bin/python -m privacy_filter.voice --adb           # also: any glasses button press = talk
   .venv/bin/python -m privacy_filter.voice --text "also blur screens"
   .venv/bin/python -m privacy_filter.voice --audio-file cmd.aiff
+  flags: --voice NAME --rate WPM --handsfree --debug (timings)
 """
 import argparse
 import atexit
 import json
 import os
 import queue
+import random
 import re
 import shutil
 import subprocess
@@ -89,20 +92,23 @@ def diff(old, new):
         return out
     for t in new["blur_targets"]:
         if t not in old["blur_targets"]:
-            out.append(("+", f"blur {t}", f"now blurring {t}"))
+            out.append(("+", f"blur {t}", f"{t} are blurred now"))
     for t in old["blur_targets"]:
         if t not in new["blur_targets"]:
-            out.append(("-", f"blur {t}", f"no longer blurring {t}"))
+            out.append(("-", f"blur {t}", f"{t} are visible again"))
     if old["blur_strength"] != new["blur_strength"]:
-        out.append(("~", f"blur {old['blur_strength']} -> {new['blur_strength']}", f"using a {new['blur_strength']} blur"))
+        order = list(PR.STRENGTH)
+        up = order.index(new["blur_strength"]) > order.index(old["blur_strength"])
+        out.append(("~", f"blur {old['blur_strength']} -> {new['blur_strength']}",
+                    f"the blur is {'stronger' if up else 'lighter'}, set to {new['blur_strength']}"))
     for key, verb in (("consent", "to be seen"), ("revoke", "to hide")):
         a, b = old[key], new[key]
         if (a["gesture"], a["hands"]) != (b["gesture"], b["hands"]):
             out.append(("~", f"{verb}: {_gesture_phrase(a)} -> {_gesture_phrase(b)}",
-                        f"{_gesture_phrase(b)} {verb}"))  # e.g. "one thumbs up to be seen"
+                        f"people show {_gesture_phrase(b)} {verb}"))  # e.g. "one thumbs up to be seen"
     if old["consent"].get("hold_s") != new["consent"].get("hold_s"):
         out.append(("~", f"hold {old['consent']['hold_s']:g} s -> {new['consent']['hold_s']:g} s",
-                    f"hold it for {new['consent']['hold_s']:g} second{'' if new['consent']['hold_s'] == 1 else 's'}"))
+                    f"they hold it for {new['consent']['hold_s']:g} second{'' if new['consent']['hold_s'] == 1 else 's'}"))
     return out
 
 
@@ -125,25 +131,49 @@ def _join(xs):
     return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
 
 
+OK_OPENERS = ["Done.", "You got it.", "Sure thing.", "All set.", "Okay!"]
+FOLLOW_UPS = ["Anything else?", "", "", "What else can I do?"]
+HELP = ("I'm your privacy assistant. I can blur screens as well as faces, make the blur stronger or lighter, "
+        "change the gestures people use to be seen, undo, or go back to default. Just ask!")
+THANKS = ["Anytime!", "Happy to help.", "You're welcome!"]
+
+
 def readback(action, name, prof, changes, refusals, reply=""):
-    """What the Mac says out loud: short and natural. Facts come from the validated profile, not the LLM."""
+    """What the Mac says out loud: short, warm, natural. Facts come from the validated profile + diff, never the LLM
+    (except `reply`, Claude's own answer when nothing changed: a question, a hello, a clarification)."""
     pname = "the default" if name == "default" else f"the {name.replace('-', ' ')}"
     parts = []
     if action == "status":
         parts.append(f"You're on {pname} profile. {summary(prof)}")
     elif action == "switch":
-        parts.append("Back to default." if name == "default" else f"Switched to {pname} profile.")
+        parts.append(f"Back to default. {summary(prof)}" if name == "default" else f"Switched to {pname} profile.")
     elif action == "undo":
-        parts.append("Undone." if changes else "Nothing to undo.")
+        parts.append(("Undone. " + _join(c[2] for c in changes).capitalize() + ".") if changes
+                     else "There's nothing to undo.")
+    elif action == "help":
+        parts.append(HELP)
+    elif action == "thanks":
+        parts.append(random.choice(THANKS))
     elif changes:
-        parts.append("Done. " + _join(c[2] for c in changes).capitalize() + ".")
+        parts.append(f"{random.choice(OK_OPENERS)} {_join(c[2] for c in changes).capitalize()}.")
+        if not refusals:
+            parts.append(random.choice(FOLLOW_UPS))
     elif reply and action == "none":
-        parts.append(reply)                      # Claude's own short answer (a question, a hello, a clarification)
+        parts.append(reply)                      # Claude's own short answer
+    elif action == "edit" and not refusals:
+        parts.append("That's already how it's set. Anything else?")
     elif not refusals:
-        parts.append("Sorry, I didn't catch a change. Try: also blur screens.")
+        parts.append("Hmm, I'm not sure what you meant. You could say: blur screens.")
     if refusals:
-        parts.append(f"I can't blur {_join(refusals)} yet.")
-    return " ".join(parts)
+        parts.append(f"I can't blur {_join(refusals)} yet, sorry. Faces and screens I can do.")
+    return " ".join(x for x in parts if x)
+
+
+def speakable(text):
+    """Claude's reply -> something `say` reads nicely (no markdown, emoji, lists)."""
+    t = re.sub(r"[*_`#>\[\]]", "", text or "")
+    t = re.sub(r"[^\x00-\u024F’'\s]", "", t)
+    return re.sub(r"\s+", " ", t).strip()
 
 
 # ---------------------------------------------------------------- fast local intent path
@@ -168,6 +198,12 @@ def parse_fast(text, names=()):
     t = normalize(text)
     if not t:
         return None
+    if re.fullmatch(r"(hey |so |ok |okay |um |uh )*(what can you do|what do you do|help|what are my options"
+                    r"|how does this work|what can i (say|ask))( for me)?", t.replace(",", "")):
+        return "help"
+    if re.fullmatch(r"(ok |okay |great |cool |perfect |awesome |nice )*(thanks?|thank you)( so much| very much)?"
+                    r"( glasses)?", t.replace(",", "")):
+        return "thanks"
     if re.fullmatch(r"(please )?(undo|undo that|undo it|revert( that)?|take (that|it) back|go back one|never ?mind)( please)?", t):
         return "undo"
     if re.search(r"what'?s (on|active|running)|what (profile|is on|are you (blurring|hiding))|which profile|^status$", t):
@@ -262,16 +298,32 @@ def apply_edits(base, edits):
 
 
 # ---------------------------------------------------------------- Claude + MCP path
-SYSTEM = """You turn one spoken command into an edit of the camera privacy profile named 'voice'.
-You are given the profile that is active now. Call save_profile exactly once with name='voice' and ALL fields
-(start from the active profile, change only what the user asked). Never use any other profile name: 'default'
-is locked. If the user asks to blur something that is not 'faces' or 'screens', still put it in blur_targets
-(the engine reports what it can't do). Gestures: peace_sign, thumbs_up, thumbs_down, open_palm, fist,
-pointing_up, i_love_you; hands 1 or 2; blur_strength light|medium|strong; hold_seconds = how long the consent
-gesture must be held. Do not call any other tool unless the user asks to undo (undo_profile name='voice').
-If the user is not asking for a profile change (a greeting, a question, small talk), call nothing and reply
-naturally and warmly in at most 15 words, ideally suggesting one example command (e.g. "also blur screens").
-After a tool call, reply with at most 6 words. Use the recent conversation for follow-ups like "yes, do that"."""
+SYSTEM = """You are the voice of a pair of privacy smart glasses: warm, upbeat, quick and genuinely helpful, like a
+friendly person, never a manual. The glasses' camera blurs people who haven't agreed to be filmed, and you control
+its privacy profile (the profile named 'voice').
+
+What you can do (explain it in plain words when asked "what can you do?" or "how does this work?"):
+- blur faces (always on, can't be turned off) and screens (phones, laptops, monitors, TVs)
+- make the blur light, medium or strong
+- gestures: people show one gesture to agree to be seen (a peace sign by default) and another to hide again;
+  one or two hands; how long to hold it. Gestures: peace_sign, thumbs_up, thumbs_down, open_palm, fist,
+  pointing_up, i_love_you.
+- undo the last change, or go back to the default profile (the user just says "go back to default")
+
+How to act:
+- The text comes from speech recognition in a loud room, so it may be garbled ("blur the scream" = blur screens,
+  "make it stronger thing" = stronger blur). If it plausibly asks for a change, make your best friendly guess and do
+  it: call save_profile exactly once with name='voice' and ALL fields, starting from the active profile and changing
+  only what was asked. Never use any other profile name ('default' is locked). If they ask to blur something other
+  than faces or screens, still put it in blur_targets (the app tells them kindly it can't do it yet).
+- "undo" / "take that back": call undo_profile with name='voice'.
+- Anything else (hello, "who are you", thanks, a question, small talk, or nonsense): call no tool and just answer.
+  For nonsense, guess kindly ("Did you want me to blur screens?") instead of saying you didn't understand.
+- Use the recent conversation for follow-ups like "yes, do that", "even more", "and screens too".
+
+Your reply is spoken aloud by a text-to-speech voice: one or two short sentences, under 25 words, no lists, no
+markdown, no emoji, contractions welcome. When you didn't change anything, it's fine to end with a tiny suggestion
+like "Want me to blur screens too?". After a tool call, reply with just a few words (the app reads back the change)."""
 
 HISTORY = []          # last few (user, reply) exchanges, so follow-ups make sense
 
@@ -319,11 +371,9 @@ def run_claude(text, active_prof, model="haiku", timeout=60):
                     continue
                 problems += d.get("problems") or []
     if r.returncode != 0 and not reply:
-        reply = (r.stderr or r.stdout)[-300:]
-    elif reply:
-        HISTORY.append((text, reply.strip()))
-        del HISTORY[:-3]
-    return problems, reply.strip(), time.monotonic() - t0
+        print("   claude failed:", (r.stderr or r.stdout)[-300:])
+        reply = "Sorry, my brain hiccuped for a second. Could you say that again?"
+    return problems, speakable(reply), time.monotonic() - t0
 
 
 # ---------------------------------------------------------------- audio
@@ -365,7 +415,7 @@ class Endpointer:
         if el < 0.3:
             self.floor = rms if self.floor is None else min(self.floor, rms)
         thr = max(0.01, (self.floor or 0.004) * 3.0)
-        if rms > thr:
+        if rms > thr and el >= 0.25:            # ignore the tail of our own start chime
             self.started, self.quiet = True, 0.0
         elif self.started:
             self.quiet += len(mono) / self.sr
@@ -373,14 +423,15 @@ class Endpointer:
                 or (not self.started and el >= self.no_speech_s))
 
 
-def record(dev, max_s=6.0, silence_s=0.8, stop=None):
+def record(dev, max_s=6.0, silence_s=0.8, stop=None, no_speech_s=4.0):
     """Record from `dev` (see find_mic) until the Endpointer says done or stop() returns True (a second
     Enter / button press). Returns (16 kHz mono, speech_seen)."""
     import sounddevice as sd
     idx, name, sr, ch = dev
     q = queue.Queue()
     chunks = []
-    ep = Endpointer(sr, max_s, silence_s)
+    record.by_press = False
+    ep = Endpointer(sr, max_s, silence_s, no_speech_s)
     with sd.InputStream(device=idx, samplerate=sr, channels=min(ch, 2), blocksize=int(sr * 0.03), dtype="float32",
                         callback=lambda d, *_: q.put(d.copy())):
         while True:
@@ -390,7 +441,10 @@ def record(dev, max_s=6.0, silence_s=0.8, stop=None):
                 continue
             mono = d.mean(axis=1)
             chunks.append(mono)
-            if ep.push(mono) or (stop is not None and stop()):
+            if ep.push(mono):
+                break
+            if stop is not None and stop():
+                record.by_press = True
                 break
     return resample(np.concatenate(chunks), sr), ep.started or ep.peak > 0.02
 
@@ -419,13 +473,73 @@ class STT:
         return " ".join(s.text.strip() for s in segs).strip()
 
 
-def say(text, block=False):
+# ---------------------------------------------------------------- voice output: chimes, fillers, read-back
+VOICE_PREFS = ["Ava (Premium)", "Zoe (Premium)", "Ava (Enhanced)", "Zoe (Enhanced)", "Samantha (Enhanced)",
+               "Allison (Enhanced)", "Evan (Enhanced)", "Samantha"]
+VOICE = None          # resolved lazily by pick_voice(); --voice overrides
+RATE = 185
+SOUNDS = "/System/Library/Sounds"
+CHIME = {"start": "Tink", "end": "Pop", "error": "Bottle"}
+FILLERS = ["Mm, one sec.", "On it.", "Let me think.", "Sure, one moment.", "Hmm, okay.", "Got it, one sec."]
+SLOW_FILLERS = ["Almost there.", "Just a moment more.", "Nearly done."]
+_speech = {"p": None}
+_speech_lock = threading.Lock()
+
+
+def pick_voice(want=None):
+    """Best installed natural English voice: `want` if installed, else the first of VOICE_PREFS, else Samantha."""
+    global VOICE
+    if want is None and VOICE:
+        return VOICE
+    try:
+        out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    have = [re.split(r"\s{2,}", l.strip())[0] for l in out.splitlines() if l.strip()]
+    for v in ([want] if want else []) + VOICE_PREFS:
+        if v in have:
+            VOICE = v
+            return v
+    VOICE = "Samantha" if not want else want
+    return VOICE
+
+
+def stop_speaking():
+    with _speech_lock:
+        p = _speech["p"]
+        if p is not None and p.poll() is None:
+            p.kill()
+
+
+def speaking():
+    p = _speech["p"]
+    return p is not None and p.poll() is None
+
+
+def say(text, block=False, after=False):
+    """Speak on the Mac. after=True waits for the current utterance (e.g. a filler) instead of cutting it off."""
     if not text or not shutil.which("say"):
         return None
-    p = subprocess.Popen(["say", "-r", "200", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with _speech_lock:
+        p = _speech["p"]
+        if p is not None and p.poll() is None:
+            if after:
+                p.wait()
+            else:
+                p.kill()
+        p = subprocess.Popen(["say", "-v", pick_voice(), "-r", str(RATE), text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _speech["p"] = p
     if block:
         p.wait()
     return p
+
+
+def chime(kind, volume=0.5):
+    f = os.path.join(SOUNDS, CHIME[kind] + ".aiff")
+    if not shutil.which("afplay") or not os.path.exists(f):
+        return None
+    return subprocess.Popen(["afplay", "-v", str(volume), f], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # ---------------------------------------------------------------- the command itself
@@ -443,9 +557,11 @@ def handle(text, source="voice", use_claude=True, model="haiku", speak=True, log
     intent = parse_fast(text, names)
     res = {"text": text, "path": "fast", "action": None, "profile": None, "changes": [], "refusals": [],
            "note": ""}
-    if intent == "status":
+    prof = active
+    if intent in ("help", "thanks"):
+        res.update(action=intent, profile=act_name)
+    elif intent == "status":
         res.update(action="status", profile=act_name)
-        prof = active
     elif intent == "undo":
         before = PR.load("voice")
         prof = PR.undo("voice")
@@ -471,10 +587,20 @@ def handle(text, source="voice", use_claude=True, model="haiku", speak=True, log
                    refusals=[short_refusal(p) for p in problems])
     elif use_claude:
         res["path"] = "claude"
-        write_state(phase="thinking", heard=text, source=source, note="asking Claude")
+        write_state(phase="thinking", heard=text, source=source, note="thinking")
+        slow = None
+        if speak:
+            say(random.choice(FILLERS))                        # no dead air while Claude thinks
+            slow = threading.Timer(4.5, lambda: say(random.choice(SLOW_FILLERS), after=True))
+            slow.daemon = True
+            slow.start()
         before = PR.load("voice")
         mt0 = PR.path("voice").stat().st_mtime
-        problems, reply, cs = run_claude(text, active, model=model)
+        try:
+            problems, reply, cs = run_claude(text, active, model=model)
+        finally:
+            if slow is not None:
+                slow.cancel()
         res["claude_s"] = round(cs, 2)
         log(f"   claude ({cs:.1f}s): {reply}")
         prof = PR.load("voice")
@@ -488,11 +614,12 @@ def handle(text, source="voice", use_claude=True, model="haiku", speak=True, log
         res["refusals"] = [short_refusal(p) for p in problems]
         res["claude_reply"] = reply
     else:
-        prof = active
         res.update(action="none", profile=act_name, note="not understood (fast path only)")
     res["intent_s"] = round(time.monotonic() - t0, 2)
     res["spoken"] = readback(res["action"], res["profile"], prof, res["changes"], res["refusals"],
                              reply=res.get("claude_reply", ""))
+    HISTORY.append((text, res["spoken"]))
+    del HISTORY[:-3]
     lines = [[c[0], c[1]] for c in res["changes"]]
     if res["action"] in ("status", "switch") and not lines:
         lines = summary_lines(prof)
@@ -501,10 +628,11 @@ def handle(text, source="voice", use_claude=True, model="haiku", speak=True, log
     if res["action"] == "undo":
         lines.insert(0, ["~", "undo" if res["changes"] else "nothing to undo"])
     write_state(phase="done", heard=text, source=source, profile=res["profile"], lines=lines,
-                refusals=res["refusals"], note=res["note"] or ("no change" if res["action"] == "none" else ""))
+                refusals=res["refusals"], reply=res["spoken"], changed=bool(res["changes"]),
+                note=res["note"] or ("no change" if res["action"] == "none" else ""))
     res["live_at"] = time.time()
     if speak:
-        res["say_proc"] = say(res["spoken"])
+        res["say_proc"] = say(res["spoken"], after=True)       # let a filler finish its sentence
     return res
 
 
@@ -532,7 +660,7 @@ def adb_listener(trig_q, stop):
                 break
             m = re.search(r"(/dev/input/event\d+):\s+EV_KEY\s+(\S+)\s+DOWN", line)
             if m:
-                print(f"adb: button {m.group(2)} on {m.group(1)}")
+                print(f"  (glasses button {m.group(2)} pressed on {m.group(1)}: talk now)")
                 if time.monotonic() - last > 1.5:
                     last = time.monotonic()
                     trig_q.put(("button", m.group(2)))
@@ -548,32 +676,54 @@ def stdin_listener(trig_q):
     trig_q.put(("eof", None))
 
 
+HALLUCINATIONS = {"thank you", "thanks for watching", "you", "bye", "thank you for watching", "so", "okay"}
+DEBUG = False
+
+
+def dbg(*a):
+    if DEBUG:
+        print("  ·", *a)
+
+
 def report(res, stt_s=None, log=print):
-    t = f"stt {stt_s:.2f}s · " if stt_s is not None else ""
-    log(f"   [{res['path']}] {res['action']} -> {res['profile']} · {t}intent {res['intent_s']:.2f}s")
+    """Friendly transcript; the plumbing only with --debug."""
+    log(f"Glasses: {res['spoken']}")
     for c in res["changes"]:
-        log(f"     {c[0]} {c[1]}")
+        log(f"         {c[0]} {c[1]}")
     for r in res["refusals"]:
-        log(f"     x can't do: {r}")
-    log(f"   says: {res['spoken']}")
+        log(f"         x can't do: {r}")
+    if DEBUG:
+        t = f"stt {stt_s:.2f}s · " if stt_s is not None else ""
+        cl = f" · claude {res['claude_s']:.1f}s" if "claude_s" in res else ""
+        dbg(f"[{res['path']}] {res['action']} -> {res['profile']} · {t}intent {res['intent_s']:.2f}s{cl}")
+    log("")
 
 
 def main():
+    global DEBUG, RATE
     ap = argparse.ArgumentParser(prog="python -m privacy_filter.voice")
     ap.add_argument("--text", help="run one typed command and exit")
     ap.add_argument("--audio-file", help="run one recorded command (any format ffmpeg reads) and exit")
     ap.add_argument("--adb", action="store_true", help="also trigger from glasses button presses (adb getevent)")
+    ap.add_argument("--handsfree", action="store_true",
+                    help="no button: always listening, any speech is a turn (risky in a loud room)")
     ap.add_argument("--mic", default=MIC_NAME, help="input device name (substring); falls back to default input")
     ap.add_argument("--model", default="base.en", help="faster-whisper model (tiny.en, base.en, small.en)")
     ap.add_argument("--claude-model", default="haiku")
     ap.add_argument("--no-claude", action="store_true", help="fast local parser only")
     ap.add_argument("--no-say", action="store_true")
+    ap.add_argument("--voice", default=None, help="macOS `say` voice (default: best installed natural voice)")
+    ap.add_argument("--rate", type=int, default=RATE, help="speaking rate, words per minute")
     ap.add_argument("--max-seconds", type=float, default=6.0)
+    ap.add_argument("--debug", action="store_true", help="show timings and routing")
     ap.add_argument("--list-mics", action="store_true")
     a = ap.parse_args()
+    DEBUG, RATE = a.debug, a.rate
     sys.stdout.reconfigure(line_buffering=True)
-    kw = dict(use_claude=not a.no_claude, model=a.claude_model, speak=not a.no_say)
+    kw = dict(use_claude=not a.no_claude, model=a.claude_model, speak=not a.no_say,
+              log=dbg if a.debug else (lambda *_: None))
     PR.ensure_default()
+    voice = pick_voice(a.voice)
 
     if a.list_mics:
         import sounddevice as sd
@@ -581,85 +731,131 @@ def main():
         print("selected:", find_mic(a.mic))
         return
     if a.text:
+        print(f"You: {a.text}")
         res = handle(a.text, source="typed", **kw)
         report(res)
         _wait_say(res)
         return
     stt = STT(a.model)
-    print(f"speech-to-text: faster-whisper {a.model} (loaded in {stt.load_s:.1f}s)")
+    dbg(f"speech-to-text: faster-whisper {a.model} (loaded in {stt.load_s:.1f}s) · voice: {voice} @ {RATE} wpm")
     if a.audio_file:
-        tw0 = time.time()
         write_state(phase="listening")
         audio = load_audio_file(a.audio_file)
-        t1 = time.monotonic()
+        t1, tw1 = time.monotonic(), time.time()
+        if not a.no_say:
+            chime("end")
+        first_sound = time.monotonic() - t1
         text = stt(audio)
         t2 = time.monotonic()
-        print(f'heard: "{text}"')
         if not text:
-            write_state(phase="error", note="DIDN'T CATCH THAT")
+            write_state(phase="idle")
+            print("(didn't hear anything)")
             return
-        write_state(phase="thinking", heard=text, source="voice")
+        print(f"You: {text}")
         res = handle(text, **kw)
         report(res, t2 - t1)
-        print(f"   end-to-end (audio file in -> profile live): {res['live_at'] - tw0:.2f}s")
+        dbg(f"end of speech -> first sound {first_sound:.2f}s · -> profile live {res['live_at'] - tw1:.2f}s"
+            + (f" · claude {res['claude_s']:.1f}s" if "claude_s" in res else ""))
         _wait_say(res)
         return
 
     dev = find_mic(a.mic)
-    print(f"microphone: {dev[1]} ({dev[2]} Hz, {dev[3]} ch)")
+    dbg(f"microphone: {dev[1]} ({dev[2]} Hz, {dev[3]} ch)")
     trig_q = queue.Queue()
     stop = threading.Event()
     threading.Thread(target=stdin_listener, args=(trig_q,), daemon=True).start()
     if a.adb:
         threading.Thread(target=adb_listener, args=(trig_q, stop), daemon=True).start()
-    print("\nPress Enter and speak (stops on silence, or press Enter again)  ·  or type a command + Enter  ·  q to quit"
-          + ("  ·  glasses button = talk" if a.adb else ""))
-    say_p = None
-    while True:
-        kind, val = trig_q.get()
-        if kind == "eof" or (kind == "line" and val.strip().lower() in ("q", "quit", "exit")):
-            break
-        if say_p is not None and say_p.poll() is None:
-            say_p.kill()                                        # new command interrupts the old read-back
-        if kind == "line" and val.strip():
-            res = handle(val.strip(), source="typed", **kw)
-            report(res)
-            say_p = res.get("say_proc")
-            continue
-        # spoken command
-        print("🎙  listening…")
+    if "fallback" in dev[1]:
+        print(f"(glasses mic not found, using {dev[1]})")
+    how = ("Just talk, I'm always listening" if a.handsfree
+           else "Press Enter, then talk" + (" (or press the glasses button)" if a.adb else ""))
+    print(f"\n  {how}. I stop by myself when you pause.\n  You can also type a request and press Enter. q quits.\n")
+    write_state(phase="idle")
+
+    def listen(retry=True, handsfree=False):
+        """One spoken turn. Returns (text, stt_s, t_end) or None."""
+        stop_speaking()                                         # barge-in: talking over the read-back
         write_state(phase="listening")
+        if not handsfree:
+            if not a.no_say:
+                chime("start")
+                time.sleep(0.12)
+            print("  (listening...)", end="\r")
         t0 = time.monotonic()
+
         def pressed_again():
+            if time.monotonic() - t0 < 0.8 and not handsfree:   # a double-tap on Enter shouldn't cut you off
+                while not trig_q.empty():
+                    k, v = trig_q.queue[0]
+                    if k == "eof" or (k == "line" and v.strip()):
+                        break
+                    trig_q.get_nowait()
+                return False
             try:
                 k, v = trig_q.get_nowait()
             except queue.Empty:
                 return False
-            if k == "eof" or (k == "line" and v.strip()):
+            if k == "eof" or (k == "line" and v.strip()) or handsfree:
                 trig_q.put((k, v))          # typed text / quit: handle after this recording
-                return False
-            print("   (stopped by press)")
+                return handsfree
             return True
         try:
-            audio, spoke = record(dev, max_s=a.max_seconds, stop=pressed_again)
+            audio, spoke = record(dev, max_s=a.max_seconds, stop=pressed_again,
+                                  no_speech_s=30.0 if handsfree else 4.0)
         except Exception as e:
-            print("!! recording failed:", e)
-            write_state(phase="error", note="MIC ERROR")
-            continue
+            print("!! microphone problem:", e)
+            write_state(phase="error", note="MIC PROBLEM")
+            return None
         t1 = time.monotonic()
-        text = stt(audio) if spoke else ""
+        if handsfree and not spoke:
+            return None
+        if not a.no_say:
+            chime("end")                                        # instant "got it"
+        print(" " * 20, end="\r")
+        by_press = getattr(record, "by_press", False)
+        text = stt(audio) if (spoke or (by_press and len(audio) > 0.5 * SR)) else ""
         t2 = time.monotonic()
+        if normalize(text) in HALLUCINATIONS and not spoke:
+            text = ""
         if not text or len(normalize(text)) < 2:
-            print("   (heard nothing)")
-            write_state(phase="error", note="DIDN'T CATCH THAT")
-            say_p = say("Didn't catch that.") if not a.no_say else None
+            if retry and not handsfree:
+                write_state(phase="listening")
+                if not a.no_say:
+                    say("I'm listening.", block=True)
+                return listen(retry=False)
+            write_state(phase="idle")
+            return None
+        dbg(f"recorded {t1 - t0:.1f}s, stt {t2 - t1:.2f}s")
+        return text, t2 - t1, t1
+
+    while True:
+        if a.handsfree and trig_q.empty():
+            while speaking():                                   # don't listen to ourselves
+                time.sleep(0.05)
+            got = listen(retry=False, handsfree=True)
+        else:
+            kind, val = trig_q.get()
+            if kind == "eof" or (kind == "line" and val.strip().lower() in ("q", "quit", "exit")):
+                break
+            if kind == "line" and val.strip():
+                stop_speaking()
+                print(f"You: {val.strip()}")
+                report(handle(val.strip(), source="typed", **kw))
+                continue
+            got = listen()
+        if not got:
             continue
-        print(f'   heard: "{text}"  (recorded {t1 - t0:.1f}s, stt {t2 - t1:.2f}s)')
-        write_state(phase="thinking", heard=text, source="voice")
+        text, stt_s, t_end = got
+        print(f"You: {text}")
         res = handle(text, **kw)
-        report(res, t2 - t1)
-        print(f"   end of speech -> profile live: {time.monotonic() - t1:.2f}s")
-        say_p = res.get("say_proc")
+        report(res, stt_s)
+        dbg(f"end of speech -> profile live {time.monotonic() - t_end:.2f}s")
+        while not trig_q.empty() and trig_q.queue[0][0] in ("line", "button") \
+                and not (trig_q.queue[0][1] or "").strip():
+            trig_q.get_nowait()                                 # presses made while I was thinking
+    stop_speaking()
+    write_state(phase="idle")
     stop.set()
 
 

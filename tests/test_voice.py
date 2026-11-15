@@ -38,14 +38,14 @@ def test_voice_edit_goes_to_voice_and_activates():
     p = PR.load("voice")
     assert p["blur_targets"] == ["faces", "screens"] and p["blur_strength"] == "strong"
     assert PR.load("default")["blur_targets"] == ["faces"]
-    assert r["spoken"] == "Done. Now blurring screens and using a strong blur."
+    assert "Screens are blurred now and the blur is stronger, set to strong." in r["spoken"]
     assert VS.read_state()["lines"] == [["+", "blur screens"], ["~", "blur medium -> strong"]]
 
 
 def test_refusal_spoken_first_and_no_change():
     run("also blur screens")
     r = run("blur license plates and use one thumbs up")
-    assert "I can't blur license plates yet." in r["spoken"]
+    assert "I can't blur license plates yet" in r["spoken"]
     assert "one thumbs up to be seen" in r["spoken"].lower()
     r = run("blur license plates")
     assert r["refusals"] == ["license plates"] and r["changes"] == []
@@ -59,7 +59,7 @@ def test_undo_and_back_to_default():
     assert r["spoken"].startswith("Undone.")
     run("undo")
     assert PR.load("voice")["blur_targets"] == ["faces"]
-    assert run("undo")["spoken"] == "Nothing to undo."
+    assert run("undo")["spoken"] == "There's nothing to undo."
     run("also blur screens")
     r = run("go back to default")
     assert PR.active_name() == "default" and r["action"] == "switch"
@@ -75,6 +75,18 @@ def test_undo_and_back_to_default():
     ("Undo.", "undo"),
     ("What's on?", "status"),
     ("Only blur my coworkers", None),            # not understood locally -> Claude
+    ("Hey, what can you do?", "help"),
+    ("who are you", None),
+    ("Thank you.", "thanks"),
 ])
 def test_fast_parser(text, want):
     assert V.parse_fast(text, PR.names()) == want
+
+
+def test_warm_replies_and_hud_state():
+    assert "screens" in run("what can you do")["spoken"]
+    r = run("also blur screens")
+    st = VS.read_state()
+    assert st["reply"] == r["spoken"] and st["changed"] is True
+    assert run("blur screens")["spoken"] == "That's already how it's set. Anything else?"
+    assert V.speakable("**Sure!** 😊 Blur `screens`") == "Sure! Blur screens"
