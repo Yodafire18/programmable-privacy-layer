@@ -38,4 +38,5 @@ case $MODE in
 esac
 
 echo "keys: q quit · f forget everyone · space photo · r record · d debug overlay"
-exec $PY -m privacy_filter.live --source "$SRC" --demo --delay ${DELAY:-0.75} "$@"
+# caffeinate -d: keep the display awake for the whole demo (it slept mid-run once); -i: no idle sleep
+exec caffeinate -di $PY -m privacy_filter.live --source "$SRC" --demo --delay ${DELAY:-0.75} "$@"
