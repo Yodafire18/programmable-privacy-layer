@@ -49,6 +49,14 @@ Reference = the first 4 s looking straight (as at consent). Per-frame similarity
 Only 2 of 894 frames had no face. Best case (same light, seconds apart). Suggestion: keep `grace_floor` 0.2; a longer
 `grace_s` (about 1.5–2 s) would cover sustained tilts, but only after checking stranger similarity stays well under 0.2.
 
+- **Heat:** glasses felt cold to the touch after about 5 min of USB streaming (camera on, USB powered).
+
+## Decisions
+- Consent range: **within about 2 m is good enough** for the demo (user decision, 2026-11-15).
+  If the hackathon room needs farther: try `--set perception.hand_max_w=1280` (or 960) on the glasses, and measure
+  consent at 3 m plus the detection cost (`faces/hands ms`, `detection updates/s`, output smoothness) before adopting it.
+- `./demo.sh` runs under `caffeinate -di` (main session, 667f8bc). Grace stays 0.5 s, floor 0.2.
+
 ## Open issues
 - **Consent flicker:** a consented face re-blurs when the head tilts down or turns (per-frame match
   similarity falls under `drop_thresh` 0.3). It errs on the side of privacy, but looks glitchy. Main session is adding a short grace period.
