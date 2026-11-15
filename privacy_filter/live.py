@@ -54,11 +54,57 @@ def find_camera(name):
     return None
 
 
+class HWVideoWriter:
+    """Streams frames to ffmpeg's hardware H.264 encoder (VideoToolbox): ~45 MB/min, almost no CPU,
+    and the final .mp4 is written directly (no conversion step, nothing huge on disk)."""
+
+    def __init__(self, path, fps, size, bitrate="6M"):
+        w, h = size
+        self.path, self.ok = Path(path), True
+        self.proc = subprocess.Popen(
+            ["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}",
+             "-r", str(fps), "-i", "-", "-c:v", "h264_videotoolbox", "-b:v", bitrate, "-realtime", "1",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(self.path)],
+            stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def write(self, frame):
+        if not self.ok:
+            return
+        try:
+            self.proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+        except (BrokenPipeError, OSError):
+            self.ok = False
+
+    def release(self):
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        self.proc.wait(timeout=30)
+
+
+def make_writer(path, fps, size):
+    """GUI/key recordings (*.raw.mp4 name) -> hardware H.264 straight to the final clip_*.mp4;
+    --out paths (evals) keep OpenCV's writer."""
+    path = Path(path)
+    if path.name.endswith(".raw.mp4"):
+        return HWVideoWriter(path.with_name(path.name.replace(".raw.mp4", ".mp4")), fps, size)
+    return cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+
+
+def disk_free_gb(path=None):
+    import shutil
+    return shutil.disk_usage(path or ROOT).free / 1e9
+
+
 def finalize_recording(raw_path, wait=False):
-    """mp4v (fast to write) -> H.264 that plays everywhere (QuickTime, TikTok); runs in the background."""
+    """Recordings are written directly as H.264 by HWVideoWriter; older raw files get converted."""
     raw = Path(raw_path)
     if not raw.name.endswith(".raw.mp4"):
         print("wrote", raw)
+        return
+    if not raw.exists():                       # HWVideoWriter already wrote the final file
+        print("saved", raw.with_name(raw.name.replace(".raw.mp4", ".mp4")))
         return
     final = raw.with_name(raw.name.replace(".raw.mp4", ".mp4"))
     cmd = (f"ffmpeg -loglevel error -y -i '{raw}' -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p "
@@ -490,6 +536,9 @@ class Live:
                 ctl = self._read_ctl()
                 if ctl.get("seq") != ctl_seq:
                     ctl_seq, want = ctl.get("seq"), ctl.get("cmd")
+                if writer is not None and disk_free_gb() < 1.0:
+                    want = "stop"
+                    self.banner = ("DISK LOW - RECORDING STOPPED AND SAVED", time.monotonic() + 4)
                 self._write_live(writer is not None, rec_path, rec_t0)
             with self.lock:
                 item = self.frames.get(j)
@@ -562,6 +611,10 @@ class Live:
                 print("saved", p)
                 self.banner = ("PHOTO SAVED", time.monotonic() + 1.5)
                 want = None
+            elif want == "record" and writer is None and rec_path is None and disk_free_gb() < 2.0:
+                self.banner = (f"NOT ENOUGH DISK SPACE TO RECORD ({disk_free_gb():.1f} GB free)", time.monotonic() + 4)
+                print("record refused: low disk")
+                want = None
             elif want == "record" and writer is None and rec_path is None:
                 rec_path = OUT / f"clip_{time.strftime('%H%M%S')}.raw.mp4"
                 rec_t0 = time.time()
@@ -580,8 +633,7 @@ class Live:
             if headless:
                 self.vhud.snap(frame_out)   # voice hook: PF_VOICE_SNAP=<dir> saves overlay stills
                 if rec_path and writer is None:
-                    writer = cv2.VideoWriter(str(rec_path), cv2.VideoWriter_fourcc(*"mp4v"),
-                                             round(self.fps_in) or 30, (frame_out.shape[1], frame_out.shape[0]))
+                    writer = make_writer(rec_path, round(self.fps_in) or 30, (frame_out.shape[1], frame_out.shape[0]))
                 if writer is not None:
                     writer.write(frame_out)
             if not headless:
@@ -601,8 +653,7 @@ class Live:
                     s = 1800 / disp.shape[1]
                     disp = cv2.resize(disp, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
                 if rec_path and writer is None:
-                    writer = cv2.VideoWriter(str(rec_path), cv2.VideoWriter_fourcc(*"mp4v"),
-                                             round(self.fps_in) or 30, (rec_frame.shape[1], rec_frame.shape[0]))
+                    writer = make_writer(rec_path, round(self.fps_in) or 30, (rec_frame.shape[1], rec_frame.shape[0]))
                 if writer is not None:
                     writer.write(rec_frame)
                     cv2.circle(disp, (disp.shape[1] - 24, 24), 10, (0, 0, 255), -1)   # REC dot (not recorded)
