@@ -3,6 +3,8 @@
 Fail closed everywhere: ambiguous hands are ignored, unknown faces are blurred,
 a consented track whose current embedding stops matching is blurred instantly.
 Only consenting people's embeddings are stored (RAM only).
+Live embeds lazily: a face with "emb" None this frame is unknown, so it is never visible and can't
+complete a consent; `priority_tids` tells the embedder whose identity must be fresh every frame.
 """
 import numpy as np
 
@@ -58,11 +60,20 @@ class ConsentEngine:
         self.hold.clear()
 
     def best_match(self, emb):
-        if not self.memory:
+        if not self.memory or emb is None:
             return None, 0.0
         sims = [float(emb @ e) for _, e in self.memory]
         j = int(np.argmax(sims))
         return self.memory[j][0], sims[j]
+
+    def priority_tids(self, tracker):
+        """Tracks that could be (or become) visible: they get a fresh embedding every perceived frame."""
+        out = set(self.consented) | {tid for tid, _ in self.hold}
+        if self.memory:
+            for tid, tr in tracker.tracks.items():
+                if self.best_match(tr.emb)[1] >= self.cfg["drop_thresh"]:
+                    out.add(tid)
+        return out
 
     def step(self, t, faces, track_ids, hands, tracker):
         """Returns {track_id: {"visible": bool, "sim": float, "hold": {kind: progress}}}."""
@@ -79,6 +90,7 @@ class ConsentEngine:
         for k in list(self.hold):
             if k not in active:
                 del self.hold[k]
+        fresh = {tid for f, tid in zip(faces, track_ids) if f["emb"] is not None}
         progress = {}
         for k in active:
             start = self.hold.setdefault(k, t)
@@ -88,8 +100,8 @@ class ConsentEngine:
             if p >= 1.0:
                 tid, kind = k
                 tr = tracker.tracks.get(tid)
-                if tr is None:
-                    continue
+                if tr is None or tid not in fresh:
+                    continue              # identity not freshly verified this frame: decide on a later frame
                 if kind == self.consent_g and tid not in self.consented:
                     self.consented.add(tid)
                     self.memory.append((self._next_key, tr.emb.copy()))
@@ -104,9 +116,9 @@ class ConsentEngine:
         states = {}
         for f, tid in zip(faces, track_ids):
             tr = tracker.tracks[tid]
-            cur = f["emb"].astype(np.float32)
+            cur = None if f["emb"] is None else f["emb"].astype(np.float32)
             _, sim_track = self.best_match(tr.emb)
-            _, sim_cur = self.best_match(cur)
+            _, sim_cur = self.best_match(cur)       # no fresh embedding -> 0.0 -> blurred
             if tid not in self.consented and sim_track >= cfg["match_thresh"] and tr.n >= 3:
                 self.consented.add(tid)        # remembered person re-appeared
             visible = tid in self.consented and sim_cur >= cfg["drop_thresh"]

@@ -6,7 +6,7 @@ on the synthetic corpus with the same ground truth + metrics as the offline eval
 import argparse
 
 from privacy_filter import config as C
-from privacy_filter.live import Live
+from privacy_filter.live import Live, live_settings
 from privacy_filter.process import clip_path, load_labels
 from privacy_filter.sources import video_info
 
@@ -43,12 +43,7 @@ def main():
     a = ap.parse_args()
     cfg = C.load(None, a.set)
     cfg["timeline"]["buffer_s"] = a.delay
-    cfg["perception"].setdefault("hand_max_w", 640)
-    cfg["perception"].setdefault("ort_threads", 3)
-    cfg["perception"].setdefault("parallel", True)
-    cfg["timeline"]["hold_miss_s"] = max(cfg["timeline"]["hold_miss_s"], 1.0)
-    if not any(o.startswith("perception.det_thresh=") for o in a.set):
-        cfg["perception"]["det_thresh"] = 0.35          # catch half-faces at frame edges (fail closed)
+    live_settings(cfg, a.set)
     rows, tot = [], {"leak": 0, "fvis": 0, "over": 0}
     for c in list_clips(a.clips):
         m = run_clip(c, cfg)

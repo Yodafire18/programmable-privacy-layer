@@ -35,7 +35,9 @@ def _extend_edges(box, W, H, margin=4, f=0.6):
     return [x1, y1, x2, y2]
 
 
-def build(logic, fps, cfg_t, cfg_r, size=None):
+def build(logic, fps, cfg_t, cfg_r, size=None, only=None):
+    """Regions for every frame, or (only=i) the same result for frame i alone (live: one frame per call,
+    frames after i don't affect it except through the interpolation that is computed anyway)."""
     n = len(logic)
     L = int(round(cfg_t["buffer_s"] * fps))
     hold = int(round(cfg_t["hold_miss_s"] * fps))
@@ -79,11 +81,13 @@ def build(logic, fps, cfg_t, cfg_r, size=None):
     # blur strength per track over time: instant on, fade off
     regions = [[] for _ in range(n)]
     strength = {}
-    for i in range(n):
+    for i in range(n if only is None else only + 1):
         for tid, (box, vis) in raw[i].items():
             s = strength.get(tid, 1.0)
             s = max(0.0, s - 1.0 / fade) if vis else 1.0
             strength[tid] = s
+            if only is not None and i != only:
+                continue
             # smooth: union of this track's boxes within +-k frames
             x1, y1, x2, y2 = box
             for j in range(max(0, i - k), min(n, i + k + 1)):

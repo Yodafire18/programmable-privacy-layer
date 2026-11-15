@@ -4,6 +4,9 @@ Output per frame is plain data so it can be cached and replayed:
   {"t": sec, "faces": [{"box": [x1,y1,x2,y2], "score": f, "emb": float16[512]}],
    "hands": [{"gesture": str, "score": f, "center": [x,y], "box": [...]}],
    "ms": {"faces": f, "hands": f}}
+
+Live can embed lazily (`Perception(..., select=fn)`): every face is detected, but ArcFace only runs for
+the faces `select(faces)` picks; the others carry "emb": None (= unknown identity, never visible).
 """
 import os
 import time
@@ -51,6 +54,38 @@ class FaceEngine:
             self.app = FaceAnalysis(name=model, allowed_modules=["detection", "recognition"],
                                     providers=list(providers))
             self.app.prepare(ctx_id=-1, det_size=(det_size, det_size), det_thresh=det_thresh)
+
+    def detect_input(self, shape, long_side):
+        """Detector input (w, h) with the frame's aspect ratio (multiples of 32): no padding is wasted, so a
+        1280x720 frame at long_side=1280 costs ~40% less than a 1280x1280 square and keeps small faces."""
+        h, w = shape[:2]
+        r = long_side / max(h, w)
+        return (max(32, int(np.ceil(w * r / 32)) * 32), max(32, int(np.ceil(h * r / 32)) * 32))
+
+    def detect(self, bgr, long_side=None):
+        """Detection only: [{"box","score","kps","emb": None}]."""
+        size = self.detect_input(bgr.shape, long_side) if long_side else None
+        bboxes, kpss = self.app.det_model.detect(bgr, input_size=size, max_num=0, metric="default")
+        return [{"box": [float(v) for v in bboxes[i, :4]], "score": float(bboxes[i, 4]),
+                 "kps": kpss[i], "emb": None} for i in range(bboxes.shape[0])]
+
+    def embed(self, bgr, faces, idx):
+        """ArcFace for faces[i], i in idx (one batch); same result as app.get's normed_embedding."""
+        if not idx:
+            return
+        from insightface.utils import face_align
+        rec = self.app.models["recognition"]
+        crops = [face_align.norm_crop(bgr, landmark=faces[i]["kps"], image_size=rec.input_size[0]) for i in idx]
+        feats = rec.get_feat(crops)
+        for i, e in zip(idx, feats):
+            faces[i]["emb"] = (e / np.linalg.norm(e)).astype(np.float16)
+
+    def lazy(self, bgr, select, long_side=None):
+        faces = self.detect(bgr, long_side)
+        self.embed(bgr, faces, list(select(faces)) if faces else [])
+        for f in faces:
+            del f["kps"]
+        return faces
 
     def __call__(self, bgr):
         out = []
@@ -114,7 +149,7 @@ class HandEngine:
 
 
 class Perception:
-    def __init__(self, pcfg, video=True):
+    def __init__(self, pcfg, video=True, select=None):
         self.faces = FaceEngine(pcfg["det_size"], pcfg["det_thresh"], pcfg["providers"], pcfg["face_model"],
                                 threads=pcfg.get("ort_threads"))
         self.hands = HandEngine(pcfg["num_hands"], pcfg["hand_min_conf"], video=video,
@@ -123,6 +158,13 @@ class Perception:
         if pcfg.get("parallel"):
             from concurrent.futures import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(max_workers=1)   # one fixed thread for MediaPipe
+        self.select = select                    # lazy embedding (live): faces -> indices to embed
+        self.det_long = pcfg.get("det_long")    # aspect-preserving detector input (live)
+
+    def _faces(self, bgr):
+        if self.select is None and not self.det_long:
+            return self.faces(bgr)              # offline path: unchanged (cached results stay valid)
+        return self.faces.lazy(bgr, self.select or (lambda fs: range(len(fs))), self.det_long)
 
     def _timed_hands(self, bgr, t):
         t0 = time.perf_counter()
@@ -132,12 +174,12 @@ class Perception:
         if self.pool is not None:      # faces and hands concurrently (both release the GIL in native code)
             fut = self.pool.submit(self._timed_hands, bgr, t)
             t0 = time.perf_counter()
-            faces = self.faces(bgr)
+            faces = self._faces(bgr)
             ms_f = (time.perf_counter() - t0) * 1000
             hands, ms_h = fut.result()
             return {"t": t, "faces": faces, "hands": hands, "ms": {"faces": ms_f, "hands": ms_h}}
         t0 = time.perf_counter()
-        faces = self.faces(bgr)
+        faces = self._faces(bgr)
         t1 = time.perf_counter()
         hands = self.hands(bgr, t)
         t2 = time.perf_counter()

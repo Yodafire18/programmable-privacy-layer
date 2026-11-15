@@ -26,9 +26,12 @@ from . import profiles as PR
 from . import render as R
 from . import timeline
 from .consent import ConsentEngine
-from .tracker import Tracker
+from .tracker import Tracker, select_embeds
 
 ROOT = Path(__file__).resolve().parent.parent
+# live detector input long side (1280x720 -> 1280x736 input) and lazy-embedding policy
+DET_LONG = 1280
+EMBED = {"refresh_n": 5, "max_per_frame": 4, "conf_iou": 0.5}
 WIN = "privacy filter  (left: debug · right: output)"
 OUT = ROOT / "output"
 
@@ -45,9 +48,13 @@ def _perception_worker(cfg, req_ev, in_q, out_q, cmd_q):
     import queue
 
     from .perception import Perception
-    P = Perception(cfg["perception"], video=True)
     tracker = Tracker(cfg["tracker"])
     consent = ConsentEngine(cfg["consent"], video=True)
+    select = None
+    if cfg["perception"].get("embed") is not None:     # lazy ArcFace: only faces whose identity is needed
+        def select(faces):
+            return select_embeds(tracker, faces, consent.priority_tids(tracker), cfg["perception"]["embed"])
+    P = Perception(cfg["perception"], video=True, select=select)
     out_q.put(("ready",))
     n_ev = 0
     while True:
@@ -220,7 +227,7 @@ class Live:
             b = min(max(j, self.done), j + ahead)   # never look further than the buffer (bounded cost)
             win = [self.logic.get(i, []) for i in range(a, b + 1)]
             perceived = {i: len(self.logic[i]) for i in range(a, b + 1) if i in self.logic}
-        regs = timeline.build(win, fps, tl, self.cfg["render"], size)[j - a]
+        regs = timeline.build(win, fps, tl, self.cfg["render"], size, only=j - a)[j - a]
         if self._dropout(j, perceived, fps):
             W, H = size
             regs = regs + [{"tid": -1, "box": [-W, -H, 2 * W, 2 * H], "blur": 1.0}]
@@ -474,6 +481,21 @@ class Live:
             q.cancel_join_thread()
 
 
+def live_settings(cfg, overrides=()):
+    """Live-only perception/timeline settings (offline DEFAULTS and their caches stay untouched).
+    Shared with eval.live_eval so it scores exactly what runs live."""
+    p = cfg["perception"]
+    p.setdefault("hand_max_w", 640)
+    p.setdefault("ort_threads", 3)       # leave cores for capture + display
+    p.setdefault("parallel", True)       # faces + hands at the same time
+    p.setdefault("det_long", DET_LONG)   # aspect-preserving detector input: small faces in crowds
+    p.setdefault("embed", dict(EMBED))   # lazy ArcFace (see tracker.select_embeds)
+    cfg["timeline"]["hold_miss_s"] = max(cfg["timeline"]["hold_miss_s"], 1.0)   # live sees fewer frames
+    if not any(o.startswith("perception.det_thresh=") for o in overrides):
+        p["det_thresh"] = 0.35           # catch half-faces at frame edges (fail closed)
+    return cfg
+
+
 def main():
     import os
     import sys
@@ -491,13 +513,7 @@ def main():
     ap.add_argument("--demo", action="store_true", help="full-screen, filtered-only output (safe for a big screen)")
     ap.add_argument("--profile", help="activate this profile (default: profiles/ACTIVE)")
     a = ap.parse_args()
-    cfg = C.load(a.config, a.set)
-    cfg["perception"].setdefault("hand_max_w", 640)
-    cfg["perception"].setdefault("ort_threads", 3)       # leave cores for capture + display
-    cfg["perception"].setdefault("parallel", True)       # faces + hands at the same time
-    cfg["timeline"]["hold_miss_s"] = max(cfg["timeline"]["hold_miss_s"], 1.0)   # live sees fewer frames
-    if not any(o.startswith("perception.det_thresh=") for o in a.set):
-        cfg["perception"]["det_thresh"] = 0.35          # catch half-faces at frame edges (fail closed)   # live speed; eval keeps full-res (cache keys unchanged)
+    cfg = live_settings(C.load(a.config, a.set), a.set)
     if a.delay is not None:
         cfg["timeline"]["buffer_s"] = a.delay
     PR.ensure_default()
