@@ -10,3 +10,4 @@ revoke:
   gesture: thumbs_down
   hands: 2
 blur_strength: medium
+locked: true

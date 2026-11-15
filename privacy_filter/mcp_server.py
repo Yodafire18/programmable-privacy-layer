@@ -16,7 +16,8 @@ server = MCPServer(
     instructions=(
         "Programmable privacy layer for camera glasses. Turn the user's plain-English rules into a profile with "
         "save_profile, run test_profile on it, then activate_profile to apply it to the live camera. "
-        "Call list_capabilities first. If the user asks for something the engine can't do, say so plainly; "
+        "Call list_capabilities first. The 'default' profile is locked (save_profile refuses it): save changes under "
+        "another name, e.g. 'voice' (the profile the glasses' voice commands edit). If the user asks for something the engine can't do, say so plainly; "
         "never claim an unsupported target or gesture is handled."
     ),
 )
@@ -50,7 +51,12 @@ def save_profile(name: str, description: str, consent_gesture: str = "peace_sign
                  hold_seconds: float = 0.75, revoke_gesture: str = "thumbs_down", revoke_hands: int = 2,
                  blur_strength: str = "medium", blur_targets: list[str] | None = None) -> dict:
     """Create or overwrite a privacy profile. `description` should restate the user's rule in plain English.
-    Unsupported targets/gestures are reported in `problems` and not applied."""
+    Unsupported targets/gestures are reported in `problems` and not applied.
+    Locked profiles (e.g. 'default') can't be overwritten: save under another name such as 'voice'."""
+    if PR.is_locked(name):
+        return {"saved": None, "refused": True,
+                "error": f"profile '{PR.slug(name)}' is locked (the gold default) and can't be changed. "
+                         f"Save the edit under another name, e.g. 'voice', then activate that."}
     clean, problems = PR.save({
         "name": name, "description": description,
         "blur_targets": blur_targets or ["faces"],
@@ -58,8 +64,11 @@ def save_profile(name: str, description: str, consent_gesture: str = "peace_sign
         "revoke": {"gesture": revoke_gesture, "hands": revoke_hands},
         "blur_strength": blur_strength,
     })
-    return {"saved": clean, "file": str(PR.path(clean["name"])), "problems": problems,
-            "note": "Saved but not active. Run test_profile, then activate_profile."}
+    live = PR.active_name() == clean["name"]
+    note = ("Saved. This profile is the active one, so the change is live on the glasses now."
+            if live else "Saved but not active yet. Run test_profile, then activate_profile.")
+    return {"saved": clean, "file": str(PR.path(clean["name"])), "problems": problems, "live_now": live,
+            "note": note}
 
 
 def friendly_summary(m):
@@ -110,6 +119,15 @@ def activate_profile(name: str) -> dict:
     """Make this profile live. The running camera app picks it up within a second."""
     PR.activate(name)
     return {"active_profile": PR.active_name(), "profile": PR.load(name)}
+
+
+@server.tool()
+def undo_profile(name: str) -> dict:
+    """Restore the previous saved version of a profile (each save keeps a history)."""
+    prof = PR.undo(name)
+    if prof is None:
+        return {"undone": False, "note": f"no earlier version of '{PR.slug(name)}'"}
+    return {"undone": True, "profile": prof, "active_profile": PR.active_name()}
 
 
 @server.tool()
