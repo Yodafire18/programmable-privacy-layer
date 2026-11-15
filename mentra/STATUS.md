@@ -26,6 +26,29 @@ Caveats:
 | Peace-sign consent | unblurs about 0.6–0.8 s after both hands are up | same recording |
 | Stability | no errors or reconnects in 2.5 min of headless running | the run exited after about 150 s of the requested 300; see open issues |
 
+## Re-test after a4d7c93 (camera by name, camera reconnect, consent grace)
+Run with `--source "cam:Mentra Camera" --demo --out`, about 200 s, voice-prompted steps:
+- **Unplug / replug:** PASS. Showed "RECONNECTING TO MENTRA CAMERA…" for about 13 s (10 s unplugged + about 3 s), then one 1 s drop just after replugging,
+  then recovered. Every 3rd frame around the reconnect checked: no face visible, and no fallback to the FaceTime camera.
+- **Consent distance:** 1 m works (unblurs about 1–2 s after both hands are up); 2 m works (one of two tries);
+  **3 m fails** (held 5 s, twice). Demo rule: give consent within about 2 m. A one-hand peace sign is ignored (correct).
+- **Thumbs-down:** about 2–3 s at 1 m, about 8 s at 2 m.
+- **Head turn after consent:** brief turns stay visible. Looking down for a sustained stretch blurs, then comes back when facing the camera again (smooth, no flicker).
+- Frames arriving 24.6 fps; main-loop time 24 / 27 ms (p50 / p95) in `--demo` while recording.
+- **Display sleep blacked out the screen mid-run.** The `caffeinate` already running was `-i` only. **Use `caffeinate -d`
+  for the demo** (keeps the display awake).
+
+### Similarity during head poses (`mentra/sim_check.py`, buffalo_s, 34 s raw clip)
+Reference = the first 4 s looking straight (as at consent). Per-frame similarity:
+| pose | similarity |
+|---|---|
+| straight | 0.89–0.96 |
+| turn left/right | 0.48–0.63 (never under 0.3) |
+| tilt | 0.22–0.42 (about half under 0.3, none under 0.2) |
+| look down | 0.00–0.29, middle about 0.1–0.2 (indistinguishable from a stranger: blurring is correct) |
+Only 2 of 894 frames had no face. Best case (same light, seconds apart). Suggestion: keep `grace_floor` 0.2; a longer
+`grace_s` (about 1.5–2 s) would cover sustained tilts, but only after checking stranger similarity stays well under 0.2.
+
 ## Open issues
 - **Consent flicker:** a consented face re-blurs when the head tilts down or turns (per-frame match
   similarity falls under `drop_thresh` 0.3). It errs on the side of privacy, but looks glitchy. Main session is adding a short grace period.
