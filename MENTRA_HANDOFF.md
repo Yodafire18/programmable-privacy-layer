@@ -151,7 +151,7 @@ Override any of them with `--set key=value`.
   - The app **reads RTSP** locally: `rtsp://localhost:8554/live/mentra`. RTSP connects in about 2 s and is steadier than reading RTMP.
   - `stream/fake_mentra.sh` pushes a looping clip exactly as the glasses would. Use it to verify the Mac side whenever in doubt.
   - The live app **auto-reconnects** when the stream drops ("WAITING FOR GLASSES STREAM…" / "RECONNECTING…" screen), so nothing leaks while it's down.
-- Mac IP on the current Wi-Fi was `10.0.0.38`. **It will change on a hotspot.** `./demo.sh` prints the current one.
+- Mac IP on the current Wi-Fi is printed by ./demo.sh. **It will change on a hotspot.** `./demo.sh` prints the current one.
 - Live app: `.venv/bin/python -m privacy_filter.live --source <url|0|file> [--delay 0.75] [--demo] [--profile NAME]`. It prints `output: … fps … frame gap …` and `capture: … fps` on exit, and `PF_TRACE=1` prints per-second state.
 - MCP server (profiles) is registered with Claude Code for this folder. It's not your concern unless asked.
 
@@ -180,7 +180,7 @@ So:
 - **Don't edit anything under `privacy_filter/` or `eval/`.** If the live app needs a change for Mentra (e.g. a new source type), write down exactly what and why, and tell the user to relay it to the main session.
 - Put any new code or config under `mentra/` (e.g. a Mentra app) or `stream/`. Editing `stream/mediamtx.yml` is fine.
 - When committing, commit **only your paths**:
-  `git add mentra stream && git -c user.name="ani" -c user.email="anu.srini21@gmail.com" commit -m "..." -- mentra stream`
+  `git add mentra stream && git -c user.name="ani" -c user.email="<your-email>" commit -m "..." -- mentra stream`
   End commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Don't persist git config, and don't commit `stream/auto.crt` or `stream/auto.key` (gitignored).
 - The CPU is shared. Avoid long benchmark loops while the other agents run unless the user asks.
 
