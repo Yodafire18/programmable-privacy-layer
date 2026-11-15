@@ -53,6 +53,54 @@ def find_camera(name):
     return None
 
 
+class NamedCamera:
+    """cv2.VideoCapture-like reader for a camera selected by its exact AVFoundation name, via ffmpeg."""
+
+    def __init__(self, name, w=1280, h=720, fps=30):
+        self.w, self.h, self.fps = w, h, fps
+        exact = self._exact_name(name)
+        self.proc = subprocess.Popen(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-framerate", str(fps),
+             "-video_size", f"{w}x{h}", "-pixel_format", "nv12", "-i", exact,
+             "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=w * h * 3)
+
+    @staticmethod
+    def _exact_name(name):
+        import re
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                             capture_output=True, text=True, timeout=5).stderr
+        video = out.split("video devices:")[-1].split("audio devices:")[0]
+        for m in re.finditer(r"\[\d+\] (.+)", video):
+            if name.lower() in m.group(1).lower():
+                return m.group(1).strip()
+        return name
+
+    def isOpened(self):
+        return self.proc.poll() is None
+
+    def read(self):
+        n = self.w * self.h * 3
+        buf = self.proc.stdout.read(n)
+        if not buf or len(buf) < n:
+            return False, None
+        return True, np.frombuffer(buf, np.uint8).reshape(self.h, self.w, 3)
+
+    def get(self, prop):
+        return float(self.fps) if prop == cv2.CAP_PROP_FPS else 0.0
+
+    def set(self, *a):
+        return False
+
+    def release(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+
 def say(text):
     try:
         subprocess.Popen(["say", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -166,10 +214,11 @@ class Live:
     def _open(self):
         src = str(self.source)
         if src.startswith("cam:"):                 # camera by name, e.g. cam:Mentra Camera — never falls back
-            idx = find_camera(src[4:])
-            if idx is None:
+            if find_camera(src[4:]) is None:
                 return None
-            src = str(idx)
+            # open BY NAME via ffmpeg: OpenCV's camera numbering can differ from ffmpeg's after a replug,
+            # which once opened the FaceTime camera instead of the glasses
+            return NamedCamera(src[4:])
         cap = cv2.VideoCapture(int(src)) if src.isdigit() else cv2.VideoCapture(src, cv2.CAP_FFMPEG)
         if src.isdigit():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
