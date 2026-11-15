@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- End-to-end delay test: open this, point the glasses at it, and put the live app window
+     (not --demo) beside it. A screenshot shows the real clock and the clock as seen through
+     the pipeline; the difference is the end-to-end delay.
+     NOTE: the measured number INCLUDES the app's own --delay look-ahead. Run with --delay 0 to
+     isolate glasses + capture + display. (Mentra USB, 2026-11-15: 0.96 s at --delay 0.75 => ~0.21 s.)
+     The terminal can't screencapture (no Screen Recording permission); press Cmd-Shift-3 by hand —
+     screenshots land in ~/Downloads on this Mac. -->
+<meta charset="utf-8"><title>Latency clock</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;color:#fff;font:700 18vw/1 Menlo,monospace;
+    display:flex;align-items:center;justify-content:center}
+</style>
+<div id="t">0.000</div>
+<script>
+  const el = document.getElementById('t');
+  (function tick(){ const s = (performance.now()/1000)%100; el.textContent = s.toFixed(3); requestAnimationFrame(tick); })();
+</script>
