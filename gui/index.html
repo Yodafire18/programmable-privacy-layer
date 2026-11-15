@@ -36,6 +36,12 @@
   .strip .live { font-size: 1.15rem; }
   .strip .live b { color: var(--good); }
   .strip .spacer { flex: 1; }
+  .apps { display: flex; gap: .6rem; }
+  .app { display: flex; align-items: center; gap: .5rem; padding: .35rem .7rem; border: 1px solid var(--line);
+         border-radius: 999px; font-size: .95rem; }
+  .app .led { width: 10px; height: 10px; border-radius: 50%; background: #555; }
+  .app.on .led { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .app button { padding: .2rem .7rem; font-size: .85rem; }
   .flash { animation: flash 1.6s ease-out; }
   @keyframes flash { 0% { background: rgba(74,222,128,.35); } 100% { background: transparent; } }
 
@@ -115,6 +121,7 @@
   <div class="live">Live on the glasses: <b id="liveName">…</b></div>
   <div class="muted small" id="liveWhen"></div>
   <div class="spacer"></div>
+  <div class="apps" id="apps"></div>
   <h1>🕶️ Privacy Filter</h1>
 </div>
 
@@ -221,8 +228,21 @@ function renderStatus(st) {
   $("liveWhen").textContent = st.activated_at ? `switched ${ago(st.activated_at)} (${clock(st.activated_at)})` : "";
   if (lastActive !== null && lastActive !== st.active) { const s = $("strip"); s.classList.remove("flash"); void s.offsetWidth; s.classList.add("flash"); }
   lastActive = st.active;
+  renderApps(st.apps || {});
   const vp = $("voicePanel");
   if (st.voice) { vp.hidden = false; renderVoice(st.voice); } else vp.hidden = true;
+}
+function renderApps(apps) {
+  $("apps").innerHTML = Object.entries(apps).map(([k, a]) =>
+    `<div class="app ${a.running ? "on" : ""}"><span class="led"></span>${esc(a.label)}
+       <button onclick="appCtl('${k}', ${a.running ? "'stop'" : "'start'"})">${a.running ? "Stop" : "Start"}</button></div>`).join("");
+}
+async function appCtl(key, action) {
+  try {
+    const r = await api(`/api/apps/${action}`, { app: key });
+    toast(action === "start" ? (r.note || "Opening in a Terminal window…") : "Stopping…");
+    renderApps(r.apps || {});
+  } catch (e) { toast(e.message, true); }
 }
 function renderVoice(v) {
   const pick = (...ks) => { for (const k of ks) if (v[k] !== undefined && v[k] !== null && v[k] !== "") return v[k]; };

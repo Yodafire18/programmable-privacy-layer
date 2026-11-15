@@ -80,8 +80,8 @@
 
 ## Setup (before judges arrive)
 - Mac plugged in, well-lit spot, glasses on USB (cable looped/taped).
-- Terminal 1: `./demo.sh` → full-screen filtered glasses view (auto-picks "Mentra Camera"); runs under `caffeinate`.
-- Terminal 2: voice tool (typed commands work there too).
-- Browser: GUI at `http://localhost:7860`, with the tool-call/test panel visible. Backup: a `claude` session in this folder.
+- **Easiest:** `./start.sh` opens everything. Or start just the GUI (`.venv/bin/python -m gui.server`, http://localhost:7860) and use its **Start/Stop buttons** (top bar) for the glasses view and voice; the lights show what's running.
+- What those open: the glasses view (`./demo.sh`, full-screen filtered, auto-picks "Mentra Camera", runs under `caffeinate`) and the voice tool (its own Terminal; Enter = talk, or type).
+- Browser: GUI with the tool-call/test panel visible. Backup: a `claude` session in this folder.
 - Activate `default` (GUI Activate button, or `activate_profile default` in Claude).
 - Phone hotspot on (only Claude needs internet).

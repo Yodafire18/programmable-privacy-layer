@@ -30,6 +30,54 @@ RUNS = ROOT / "runs"
 CLAUDE_LOCK = threading.Lock()
 
 
+# ---------- launch / track the demo apps ----------
+# Each app opens in its own Terminal window (voice needs a terminal for Enter-to-talk / typing).
+# Tracked by process name, so it also sees apps started from start.sh or by hand.
+APPS = {
+    "glasses": {"label": "Glasses view", "cmd": "./demo.sh", "match": "privacy_filter.live"},
+    "voice": {"label": "Voice commands", "cmd": ".venv/bin/python -m privacy_filter.voice --adb",
+              "match": "privacy_filter.voice"},
+}
+
+
+def app_pids(key):
+    r = subprocess.run(["pgrep", "-f", APPS[key]["match"]], capture_output=True, text=True)
+    return [int(x) for x in r.stdout.split() if x.strip() and int(x) != os.getpid()]
+
+
+def apps_status():
+    return {k: {"label": a["label"], "running": bool(app_pids(k))} for k, a in APPS.items()}
+
+
+def start_app(key):
+    if app_pids(key):
+        return {"started": False, "note": f"{APPS[key]['label']} is already running"}
+    cmd = f"cd '{ROOT}' && {APPS[key]['cmd']}"
+    script = f'tell application "Terminal"\n activate\n do script "{cmd}"\nend tell'
+    subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
+    return {"started": True}
+
+
+def stop_app(key):
+    import signal
+    pids = app_pids(key)
+    for pid in pids:                     # SIGINT = clean shutdown (stats printed, memory wiped)
+        try:
+            os.kill(pid, signal.SIGINT)
+        except ProcessLookupError:
+            pass
+
+    def _force():                        # anything still alive after 4 s gets SIGTERM
+        time.sleep(4)
+        for pid in app_pids(key):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+    threading.Thread(target=_force, daemon=True).start()
+    return {"stopped": bool(pids)}
+
+
 # ---------- helpers ----------
 
 def raw(name):
@@ -69,6 +117,7 @@ def status():
            "activated_at": PR.ACTIVE.stat().st_mtime if PR.ACTIVE.exists() else None,
            "now": time.time(),
            "voice": None,
+           "apps": apps_status(),
            "fingerprint": None}
     if VOICE_STATE.exists():
         try:
@@ -276,6 +325,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {"status": status()})
             if p == "/api/test":
                 return self.send(200, run_test(b["name"]))
+            if p in ("/api/apps/start", "/api/apps/stop"):
+                key = b.get("app")
+                if key not in APPS:
+                    return self.send(400, {"error": f"unknown app '{key}'"})
+                out = start_app(key) if p.endswith("start") else stop_app(key)
+                return self.send(200, {**out, "apps": apps_status()})
             if p == "/api/ask":
                 text = str(b.get("text", "")).strip()
                 if not text:
