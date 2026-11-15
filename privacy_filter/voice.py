@@ -89,20 +89,20 @@ def diff(old, new):
         return out
     for t in new["blur_targets"]:
         if t not in old["blur_targets"]:
-            out.append(("+", f"blur {t}", f"added {t}"))
+            out.append(("+", f"blur {t}", f"now blurring {t}"))
     for t in old["blur_targets"]:
         if t not in new["blur_targets"]:
-            out.append(("-", f"blur {t}", f"removed {t}"))
+            out.append(("-", f"blur {t}", f"no longer blurring {t}"))
     if old["blur_strength"] != new["blur_strength"]:
-        out.append(("~", f"blur {old['blur_strength']} -> {new['blur_strength']}", f"blur {new['blur_strength']}"))
+        out.append(("~", f"blur {old['blur_strength']} -> {new['blur_strength']}", f"using a {new['blur_strength']} blur"))
     for key, verb in (("consent", "to be seen"), ("revoke", "to hide")):
         a, b = old[key], new[key]
         if (a["gesture"], a["hands"]) != (b["gesture"], b["hands"]):
             out.append(("~", f"{verb}: {_gesture_phrase(a)} -> {_gesture_phrase(b)}",
-                        f"{_gesture_phrase(b)} {verb}"))
+                        f"{_gesture_phrase(b)} {verb}"))  # e.g. "one thumbs up to be seen"
     if old["consent"].get("hold_s") != new["consent"].get("hold_s"):
         out.append(("~", f"hold {old['consent']['hold_s']:g} s -> {new['consent']['hold_s']:g} s",
-                    f"hold {new['consent']['hold_s']:g} second{'' if new['consent']['hold_s'] == 1 else 's'}"))
+                    f"hold it for {new['consent']['hold_s']:g} second{'' if new['consent']['hold_s'] == 1 else 's'}"))
     return out
 
 
@@ -120,23 +120,29 @@ def short_refusal(problem):
     return problem[:60]
 
 
-def readback(action, name, prof, changes, refusals):
-    """Spoken text: refusals first, then what changed (or the summary when nothing did)."""
+def _join(xs):
+    xs = list(xs)
+    return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+
+
+def readback(action, name, prof, changes, refusals, reply=""):
+    """What the Mac says out loud: short and natural. Facts come from the validated profile, not the LLM."""
+    pname = "the default" if name == "default" else f"the {name.replace('-', ' ')}"
     parts = []
-    if refusals:
-        parts.append("Can't do: " + ", ".join(refusals) + ".")
-    pname = "Default" if name == "default" else f"{name.replace('-', ' ').capitalize()}"
     if action == "status":
-        parts.append(f"{pname} profile: {summary(prof)}")
+        parts.append(f"You're on {pname} profile. {summary(prof)}")
     elif action == "switch":
-        parts.append(f"{pname} profile on. {summary(prof)}")
-    elif action == "undo" and not changes:
-        parts.append("Nothing to undo.")
+        parts.append("Back to default." if name == "default" else f"Switched to {pname} profile.")
+    elif action == "undo":
+        parts.append("Undone." if changes else "Nothing to undo.")
     elif changes:
-        lead = "Undone. " if action == "undo" else ""
-        parts.append(f"{lead}{pname} profile: " + "; ".join(c[2] for c in changes) + ".")
+        parts.append("Done. " + _join(c[2] for c in changes).capitalize() + ".")
+    elif reply and action == "none":
+        parts.append(reply)                      # Claude's own short answer (a question, a hello, a clarification)
     elif not refusals:
-        parts.append(f"No change. {pname} profile: {summary(prof)}")
+        parts.append("Sorry, I didn't catch a change. Try: also blur screens.")
+    if refusals:
+        parts.append(f"I can't blur {_join(refusals)} yet.")
     return " ".join(parts)
 
 
@@ -263,7 +269,11 @@ is locked. If the user asks to blur something that is not 'faces' or 'screens', 
 (the engine reports what it can't do). Gestures: peace_sign, thumbs_up, thumbs_down, open_palm, fist,
 pointing_up, i_love_you; hands 1 or 2; blur_strength light|medium|strong; hold_seconds = how long the consent
 gesture must be held. Do not call any other tool unless the user asks to undo (undo_profile name='voice').
-If the command is not about the privacy profile, call nothing. After the tool call, reply with at most 6 words."""
+If the user is not asking for a profile change (a greeting, a question, small talk), call nothing and reply
+naturally and warmly in at most 15 words, ideally suggesting one example command (e.g. "also blur screens").
+After a tool call, reply with at most 6 words. Use the recent conversation for follow-ups like "yes, do that"."""
+
+HISTORY = []          # last few (user, reply) exchanges, so follow-ups make sense
 
 
 def mcp_config_path():
@@ -278,8 +288,10 @@ def mcp_config_path():
 
 def run_claude(text, active_prof, model="haiku", timeout=60):
     """Returns (problems, claude_reply, seconds). The saved/activated profile is read back from disk afterwards."""
-    prompt = (f"Active profile now:\n{json.dumps(active_prof)}\n\nUser said (speech-to-text, may contain "
-              f"recognition errors): \"{text}\"")
+    convo = "".join(f"User: {u}\nYou: {r}\n" for u, r in HISTORY[-3:])
+    prompt = (f"Active profile now:\n{json.dumps(active_prof)}\n\n"
+              + (f"Recent conversation:\n{convo}\n" if convo else "")
+              + f"User said (speech-to-text, may contain recognition errors): \"{text}\"")
     tools = ["mcp__privacy-filter__save_profile", "mcp__privacy-filter__undo_profile"]
     cmd = ["claude", "-p", prompt, "--mcp-config", mcp_config_path(), "--strict-mcp-config",
            "--tools", "", "--allowedTools", *tools, "--system-prompt", SYSTEM, "--model", model,
@@ -308,6 +320,9 @@ def run_claude(text, active_prof, model="haiku", timeout=60):
                 problems += d.get("problems") or []
     if r.returncode != 0 and not reply:
         reply = (r.stderr or r.stdout)[-300:]
+    elif reply:
+        HISTORY.append((text, reply.strip()))
+        del HISTORY[:-3]
     return problems, reply.strip(), time.monotonic() - t0
 
 
@@ -476,7 +491,8 @@ def handle(text, source="voice", use_claude=True, model="haiku", speak=True, log
         prof = active
         res.update(action="none", profile=act_name, note="not understood (fast path only)")
     res["intent_s"] = round(time.monotonic() - t0, 2)
-    res["spoken"] = readback(res["action"], res["profile"], prof, res["changes"], res["refusals"])
+    res["spoken"] = readback(res["action"], res["profile"], prof, res["changes"], res["refusals"],
+                             reply=res.get("claude_reply", ""))
     lines = [[c[0], c[1]] for c in res["changes"]]
     if res["action"] in ("status", "switch") and not lines:
         lines = summary_lines(prof)

@@ -38,15 +38,15 @@ def test_voice_edit_goes_to_voice_and_activates():
     p = PR.load("voice")
     assert p["blur_targets"] == ["faces", "screens"] and p["blur_strength"] == "strong"
     assert PR.load("default")["blur_targets"] == ["faces"]
-    assert r["spoken"] == "Voice profile: added screens; blur strong."
+    assert r["spoken"] == "Done. Now blurring screens and using a strong blur."
     assert VS.read_state()["lines"] == [["+", "blur screens"], ["~", "blur medium -> strong"]]
 
 
 def test_refusal_spoken_first_and_no_change():
     run("also blur screens")
     r = run("blur license plates and use one thumbs up")
-    assert r["spoken"].startswith("Can't do: license plates.")
-    assert "one thumbs up to be seen" in r["spoken"]
+    assert "I can't blur license plates yet." in r["spoken"]
+    assert "one thumbs up to be seen" in r["spoken"].lower()
     r = run("blur license plates")
     assert r["refusals"] == ["license plates"] and r["changes"] == []
 
@@ -64,7 +64,7 @@ def test_undo_and_back_to_default():
     r = run("go back to default")
     assert PR.active_name() == "default" and r["action"] == "switch"
     assert PR.load("default")["blur_targets"] == ["faces"]
-    assert run("what's on")["spoken"].startswith("Default profile:")
+    assert run("what's on")["spoken"].startswith("You're on the default profile.")
 
 
 @pytest.mark.parametrize("text,want", [
